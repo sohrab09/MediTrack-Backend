@@ -30,7 +30,7 @@ func GetUsers(db *sql.DB) http.HandlerFunc {
 		}
 
 		// Query specific columns, excluding password
-		rows, err := db.Query("SELECT id, first_name, last_name, phone, email, created_at FROM users")
+		rows, err := db.Query("SELECT id, firstName, lastName, phone, email, status, role, created_at FROM users")
 		if err != nil {
 			respondJSON(w, http.StatusInternalServerError, map[string]interface{}{
 				"success": false,
@@ -43,7 +43,7 @@ func GetUsers(db *sql.DB) http.HandlerFunc {
 		var users []models.User
 		for rows.Next() {
 			var user models.User
-			if err := rows.Scan(&user.ID, &user.FirstName, &user.LastName, &user.Phone, &user.Email, &user.CreatedAt); err != nil {
+			if err := rows.Scan(&user.ID, &user.FirstName, &user.LastName, &user.Phone, &user.Email, &user.Status, &user.Role, &user.CreatedAt); err != nil {
 				respondJSON(w, http.StatusInternalServerError, map[string]interface{}{
 					"success": false,
 					"message": "Database error",
