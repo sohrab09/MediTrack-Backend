@@ -42,15 +42,24 @@ func LoginHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		// Taking input
-		input := req.Data
 		var user models.User
 		var hashed string
-
-		// DB Query
 		err := db.QueryRow(
-			`SELECT id, first_name, last_name, phone, email, password, created_at FROM users WHERE email=$1`,
-			input.Email,
-		).Scan(&user.ID, &user.FirstName, &user.LastName, &user.Phone, &user.Email, &hashed, &user.CreatedAt)
+			`SELECT id, firstName, lastName, phone, email, password, role, status, created_at 
+			 FROM users 
+			 WHERE email=$1`,
+			req.Data.Email,
+		).Scan(
+			&user.ID,
+			&user.FirstName,
+			&user.LastName,
+			&user.Phone,
+			&user.Email,
+			&hashed,
+			&user.Role,
+			&user.Status,
+			&user.CreatedAt,
+		)
 
 		// Error check
 		if err == sql.ErrNoRows {
@@ -70,7 +79,7 @@ func LoginHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		// Password check
-		if bcrypt.CompareHashAndPassword([]byte(hashed), []byte(input.Password)) !=
+		if bcrypt.CompareHashAndPassword([]byte(hashed), []byte(req.Data.Password)) !=
 			nil {
 			respondJSON(w, http.StatusUnauthorized, map[string]interface{}{
 				"success": false,

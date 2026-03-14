@@ -49,7 +49,7 @@ func RegisterHandler(db *sql.DB) http.HandlerFunc {
 		// Taking input
 		data := req.Data
 
-		if data.FirstName == "" || data.LastName == "" || data.Email == "" || data.Phone == "" || data.Password == "" {
+		if data.FirstName == "" || data.LastName == "" || data.Email == "" || data.Phone == "" || data.Password == "" || data.Role == 0 {
 			respondJSON(w, http.StatusBadRequest, map[string]interface{}{
 				"success": false,
 				"message": "All fields are required",
@@ -72,8 +72,8 @@ func RegisterHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		// DB Query
-		query := `INSERT INTO users (first_name, last_name, phone, email, password, status, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`
+		query := `INSERT INTO users (firstName, lastName, phone, email, password, role, status, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`
 
 		var id int
 		err = db.QueryRow(
@@ -83,6 +83,7 @@ func RegisterHandler(db *sql.DB) http.HandlerFunc {
 			data.Phone,
 			data.Email,
 			string(hashed),
+			data.Role,
 			status,
 			time.Now(),
 		).Scan(&id)
@@ -92,6 +93,7 @@ func RegisterHandler(db *sql.DB) http.HandlerFunc {
 			respondJSON(w, http.StatusBadRequest, map[string]interface{}{
 				"success": false,
 				"message": "Email or phone already exists",
+				"status":  http.StatusBadRequest,
 			})
 			return
 		}
@@ -100,12 +102,14 @@ func RegisterHandler(db *sql.DB) http.HandlerFunc {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 			"message": "User registered successfully",
+			"status":  http.StatusOK,
 			"data": map[string]interface{}{
 				"id":         id,
-				"first_name": data.FirstName,
-				"last_name":  data.LastName,
+				"firstName":  data.FirstName,
+				"lastName":   data.LastName,
 				"phone":      data.Phone,
 				"email":      data.Email,
+				"role":       data.Role,
 				"status":     status,
 				"created_at": time.Now(),
 			},
