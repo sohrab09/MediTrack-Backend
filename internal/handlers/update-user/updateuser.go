@@ -1,4 +1,5 @@
-package getuser
+// Create a update user handler
+package updateuser
 
 import (
 	"database/sql"
@@ -13,10 +14,10 @@ func respondJSON(w http.ResponseWriter, status int, payload interface{}) {
 	json.NewEncoder(w).Encode(payload)
 }
 
-func GetUser(db *sql.DB) http.HandlerFunc {
+func UpdateUser(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-
-		if r.Method != http.MethodGet {
+		// Method check
+		if r.Method != http.MethodPut {
 			respondJSON(w, http.StatusMethodNotAllowed, map[string]interface{}{
 				"success": false,
 				"message": "Method not allowed",
@@ -35,19 +36,20 @@ func GetUser(db *sql.DB) http.HandlerFunc {
 		}
 
 		var user models.User
-		err := db.QueryRow(
-			"SELECT id, firstName, lastName, phone, email, status, role, created_at FROM users WHERE id=$1",
-			id,
-		).Scan(&user.ID, &user.FirstName, &user.LastName, &user.Phone, &user.Email, &user.Status, &user.Role, &user.CreatedAt)
-
-		if err == sql.ErrNoRows {
-			respondJSON(w, http.StatusNotFound, map[string]interface{}{
+		err := json.NewDecoder(r.Body).Decode(&user)
+		if err != nil {
+			respondJSON(w, http.StatusBadRequest, map[string]interface{}{
 				"success": false,
-				"message": "User not found",
+				"message": "Invalid JSON format",
 			})
 			return
 		}
 
+		// Update user in DB
+		_, err = db.Exec(
+			"UPDATE users SET firstName=$1, lastName=$2, phone=$3, email=$4, status=$5, role=$6 WHERE id=$7",
+			user.FirstName, user.LastName, user.Phone, user.Email, user.Status, user.Role, id,
+		)
 		if err != nil {
 			respondJSON(w, http.StatusInternalServerError, map[string]interface{}{
 				"success": false,
@@ -58,7 +60,7 @@ func GetUser(db *sql.DB) http.HandlerFunc {
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
-			"data":    user,
+			"message": "User updated successfully",
 		})
 	}
 }
