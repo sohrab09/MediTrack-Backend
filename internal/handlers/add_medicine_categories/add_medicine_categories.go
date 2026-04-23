@@ -11,27 +11,33 @@ import (
 	"time"
 )
 
-// Response is the common API response structure
+// Response structure
 type Response struct {
+	Status  int         `json:"status"`
 	Success bool        `json:"success"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// Helper to send consistent JSON responses
+// JSON helper
 func respondJSON(w http.ResponseWriter, status int, res Response) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(res)
 }
 
-// Validate category input fields
+// ✅ Separate response struct (IMPORTANT)
+type CategoryResponse struct {
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	Status    int    `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+// Validation
 func validateCategoryInput(data *models.MedicineCategories) error {
 	if strings.TrimSpace(data.Name) == "" {
 		return errors.New("name is required")
-	}
-	if strings.TrimSpace(data.Description) == "" {
-		return errors.New("description is required")
 	}
 	if data.Status != 0 && data.Status != 1 {
 		return errors.New("status must be 0 (inactive) or 1 (active)")
@@ -41,9 +47,10 @@ func validateCategoryInput(data *models.MedicineCategories) error {
 
 func CreateMedicineCategories(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Method check
+
 		if r.Method != http.MethodPost {
 			respondJSON(w, http.StatusMethodNotAllowed, Response{
+				Status:  http.StatusMethodNotAllowed,
 				Success: false,
 				Message: "Method not allowed",
 			})
@@ -51,77 +58,102 @@ func CreateMedicineCategories(db *sql.DB) http.HandlerFunc {
 		}
 
 		ctx := r.Context()
+
 		var req struct {
 			Data models.MedicineCategories `json:"data"`
 		}
 
-		// Decode JSON request
+		// Decode request
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
+				Status:  http.StatusBadRequest,
 				Success: false,
 				Message: "Invalid JSON format",
 			})
 			return
 		}
+
 		data := req.Data
 
-		// Validate input
+		// Validate
 		if err := validateCategoryInput(&data); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
+				Status:  http.StatusBadRequest,
 				Success: false,
 				Message: err.Error(),
 			})
 			return
 		}
 
-		// Check for duplicates
+		// Duplicate check
 		var existingID int
-		err := db.QueryRowContext(ctx, "SELECT id FROM categories WHERE name = $1", data.Name).Scan(&existingID)
+		err := db.QueryRowContext(ctx,
+			"SELECT id FROM categories WHERE name = $1",
+			data.Name,
+		).Scan(&existingID)
+
 		if err != nil && err != sql.ErrNoRows {
-			log.Println("Database error on duplicate check:", err)
+			log.Println("Duplicate check error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
+				Status:  http.StatusInternalServerError,
 				Success: false,
 				Message: "Database query error",
 			})
 			return
 		}
+
 		if err == nil {
 			respondJSON(w, http.StatusBadRequest, Response{
+				Status:  http.StatusBadRequest,
 				Success: false,
 				Message: "Category already exists",
 			})
 			return
 		}
 
-		// Insert into DB
+		// Insert
 		query := `
-			INSERT INTO categories (name, description, status, created_at)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO categories (name, status, created_at)
+			VALUES ($1, $2, $3)
 			RETURNING id, created_at
 		`
 
 		var createdID int
 		var createdAt time.Time
-		err = db.QueryRowContext(ctx, query, data.Name, data.Description, data.Status, time.Now()).Scan(&createdID, &createdAt)
+
+		err = db.QueryRowContext(
+			ctx,
+			query,
+			data.Name,
+			data.Status,
+			time.Now(),
+		).Scan(&createdID, &createdAt)
+
 		if err != nil {
-			log.Println("Database insert error:", err)
+			log.Println("Insert error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
+				Status:  http.StatusInternalServerError,
 				Success: false,
 				Message: "Failed to create category",
 			})
 			return
 		}
 
-		data.ID = createdID
-		data.CreatedAt = createdAt.Format(time.RFC3339)
+		// ✅ Build response (DON'T touch model)
+		response := CategoryResponse{
+			ID:        createdID,
+			Name:      data.Name,
+			Status:    data.Status,
+			CreatedAt: createdAt.Format(time.RFC3339),
+		}
 
-		log.Printf("Category created successfully: %+v", data)
+		log.Printf("Created category: %+v", response)
 
-		// Respond with created data
 		respondJSON(w, http.StatusCreated, Response{
+			Status:  http.StatusCreated,
 			Success: true,
 			Message: "Category created successfully",
-			Data:    data,
+			Data:    response,
 		})
 	}
 }

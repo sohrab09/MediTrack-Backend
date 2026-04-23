@@ -6,12 +6,14 @@ import (
 	"meditrack-backend/internal/database"
 	addmedicinecategories "meditrack-backend/internal/handlers/add_medicine_categories"
 	deleteuser "meditrack-backend/internal/handlers/delete-user"
+	deletemedicinecategories "meditrack-backend/internal/handlers/delete_medicine_categories"
 	getmedicinecategories "meditrack-backend/internal/handlers/get_medicine_categories"
 	"meditrack-backend/internal/handlers/getuser"
 	"meditrack-backend/internal/handlers/getusers"
 	"meditrack-backend/internal/handlers/login"
 	"meditrack-backend/internal/handlers/register"
 	updateuser "meditrack-backend/internal/handlers/update-user"
+	updatemedicinecategories "meditrack-backend/internal/handlers/update_medicine_categories"
 	"meditrack-backend/router"
 	"net/http"
 	"time"
@@ -38,6 +40,8 @@ func Serve() {
 	// Medicine Categories
 	mux.HandleFunc("POST /api/v1/medicine-categories", addmedicinecategories.CreateMedicineCategories(db))
 	mux.HandleFunc("GET /api/v1/medicine-categories", getmedicinecategories.GetMedicineCategories(db))
+	mux.HandleFunc("PUT /api/v1/medicine-categories/{id}", updatemedicinecategories.UpdateMedicineCategory(db))
+	mux.HandleFunc("DELETE /api/v1/medicine-categories/{id}", deletemedicinecategories.DeleteMedicineCategory(db))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
