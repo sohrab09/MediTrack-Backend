@@ -38,7 +38,7 @@ func UpdateMedicineCategory(db *sql.DB) http.HandlerFunc {
 		}
 
 		// URL: /categories?id=1
-		idStr := r.URL.Query().Get("id")
+		idStr := r.PathValue("id")
 		id, err := strconv.Atoi(idStr)
 		if err != nil || id <= 0 {
 			respondJSON(w, http.StatusBadRequest, Response{

@@ -30,7 +30,7 @@ func DeleteMedicineCategory(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		idStr := r.URL.Query().Get("id")
+		idStr := r.PathValue("id")
 		id, err := strconv.Atoi(idStr)
 
 		if err != nil || id <= 0 {
