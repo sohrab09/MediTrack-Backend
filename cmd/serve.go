@@ -11,6 +11,7 @@ import (
 	"meditrack-backend/internal/handlers/getuser"
 	"meditrack-backend/internal/handlers/getusers"
 	"meditrack-backend/internal/handlers/login"
+	medicineunits "meditrack-backend/internal/handlers/medicine_units"
 	"meditrack-backend/internal/handlers/register"
 	updateuser "meditrack-backend/internal/handlers/update-user"
 	updatemedicinecategories "meditrack-backend/internal/handlers/update_medicine_categories"
@@ -40,8 +41,16 @@ func Serve() {
 	// Medicine Categories
 	mux.HandleFunc("POST /api/v1/medicine-categories", addmedicinecategories.CreateMedicineCategories(db))
 	mux.HandleFunc("GET /api/v1/medicine-categories", getmedicinecategories.GetMedicineCategories(db))
+	mux.HandleFunc("GET /api/v1/medicine-categories/{id}", getmedicinecategories.GetMedicineCategoryByID(db))
 	mux.HandleFunc("PUT /api/v1/medicine-categories/{id}", updatemedicinecategories.UpdateMedicineCategory(db))
 	mux.HandleFunc("DELETE /api/v1/medicine-categories/{id}", deletemedicinecategories.DeleteMedicineCategory(db))
+
+	// Medicine Units
+	mux.HandleFunc("POST /api/v1/medicine-units", medicineunits.CreateMedicineUnits(db))
+	mux.HandleFunc("GET /api/v1/medicine-units", medicineunits.GetMedicineUnits(db))
+	mux.HandleFunc("GET /api/v1/medicine-units/{id}", medicineunits.GetMedicineUnitByID(db))
+	mux.HandleFunc("PUT /api/v1/medicine-units/{id}", medicineunits.UpdateMedicineUnits(db))
+	mux.HandleFunc("DELETE /api/v1/medicine-units/{id}", medicineunits.DeleteMedicineUnits(db))
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

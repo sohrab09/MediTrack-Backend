@@ -3,14 +3,17 @@ package getmedicinecategories
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"meditrack-backend/internal/models"
 	"net/http"
+	"strconv"
 	"time"
 )
 
 // Response structure
 type Response struct {
+	Status  int         `json:"status"`
 	Success bool        `json:"success"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
@@ -21,6 +24,18 @@ func respondJSON(w http.ResponseWriter, status int, res Response) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(res)
+}
+
+func getIDFromPath(r *http.Request) (int, error) {
+	idStr := r.PathValue("id")
+	if idStr == "" {
+		return 0, errors.New("id parameter is required")
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return 0, errors.New("invalid id format")
+	}
+	return id, nil
 }
 
 func GetMedicineCategories(db *sql.DB) http.HandlerFunc {
@@ -98,6 +113,51 @@ func GetMedicineCategories(db *sql.DB) http.HandlerFunc {
 			Success: true,
 			Message: "Categories fetched successfully",
 			Data:    categories,
+		})
+	}
+}
+
+func GetMedicineCategoryByID(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := getIDFromPath(r)
+		if err != nil {
+			respondJSON(w, http.StatusBadRequest, Response{
+				Status:  http.StatusBadRequest,
+				Success: false,
+				Message: err.Error(),
+			})
+			return
+		}
+
+		query := `SELECT id, name, status, created_at FROM categories WHERE id = $1`
+
+		var category models.MedicineCategories
+		err = db.QueryRow(query, id).Scan(&category.ID, &category.Name, &category.Status, &category.CreatedAt)
+
+		if err == sql.ErrNoRows {
+			respondJSON(w, http.StatusNotFound, Response{
+				Status:  http.StatusNotFound,
+				Success: false,
+				Message: "Medicine category not found",
+			})
+			return
+		}
+
+		if err != nil {
+			log.Printf("Error fetching medicine category: %v", err)
+			respondJSON(w, http.StatusInternalServerError, Response{
+				Status:  http.StatusInternalServerError,
+				Success: false,
+				Message: "Database error",
+			})
+			return
+		}
+
+		respondJSON(w, http.StatusOK, Response{
+			Status:  http.StatusOK,
+			Success: true,
+			Message: "Category fetched successfully",
+			Data:    category,
 		})
 	}
 }
