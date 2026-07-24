@@ -1,4 +1,4 @@
-package medicine_units
+package medicine_category
 
 import (
 	"database/sql"
@@ -13,7 +13,7 @@ import (
 	"meditrack-backend/internal/models"
 )
 
-// Response structure
+// Standard API Response structure
 type Response struct {
 	Status  int         `json:"status"`
 	Success bool        `json:"success"`
@@ -21,25 +21,27 @@ type Response struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-// JSON Helper
+// Global Category Response for API output consistency
+type CategoryResponse struct {
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	Status    int    `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+type UpdateRequest struct {
+	Name   string `json:"name"`
+	Status int    `json:"status"`
+}
+
+// Helper: Response JSON
 func respondJSON(w http.ResponseWriter, status int, res Response) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-// Validation Helper
-func validateInput(data *models.MedicineUnits) error {
-	if strings.TrimSpace(data.Name) == "" {
-		return errors.New("name is required")
-	}
-	if data.Status != 0 && data.Status != 1 {
-		return errors.New("status must be 0 (inactive) or 1 (active)")
-	}
-	return nil
-}
-
-// Extract ID from path parameter with valid integer check
+// Helper: Extract ID from URL path
 func getIDFromPath(r *http.Request) (int, error) {
 	idStr := r.PathValue("id")
 	if idStr == "" {
@@ -52,28 +54,52 @@ func getIDFromPath(r *http.Request) (int, error) {
 	return id, nil
 }
 
-// CREATE - Create a new medicine unit
-func CreateMedicineUnits(db *sql.DB) http.HandlerFunc {
+// Helper: Input Validation
+func validateCategoryInput(name string, status int) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("name is required")
+	}
+	if status != 0 && status != 1 {
+		return errors.New("status must be 0 (inactive) or 1 (active)")
+	}
+	return nil
+}
+
+// Helper: Convert Database Row into Clean CategoryResponse
+func formatCategoryResponse(id int, name string, status int, createdAt time.Time) CategoryResponse {
+	return CategoryResponse{
+		ID:        id,
+		Name:      name,
+		Status:    status,
+		CreatedAt: createdAt.Format(time.RFC3339),
+	}
+}
+
+// ---------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------
+
+// CREATE
+func CreateMedicineCategories(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		var req struct {
-			Data models.MedicineUnits `json:"data"`
+			Data models.MedicineCategories `json:"data"`
 		}
 
-		// Decode request body
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
-				Message: "Invalid request body",
+				Message: "Invalid JSON format",
 			})
 			return
 		}
 
 		data := req.Data
 
-		if err := validateInput(&data); err != nil {
+		if err := validateCategoryInput(data.Name, data.Status); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
@@ -82,80 +108,100 @@ func CreateMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Insert into database with Context
-		query := `
-			INSERT INTO medicine_units (name, status, created_at) 
-			VALUES ($1, $2, $3) 
-			RETURNING id, created_at
-		`
-
-		var createdUnit models.MedicineUnits
-		err := db.QueryRowContext(ctx, query, data.Name, data.Status, time.Now()).
-			Scan(&createdUnit.ID, &createdUnit.CreatedAt)
-
-		if err != nil {
-			log.Printf("Error creating medicine unit: %v", err)
+		// Duplicate Check with Context
+		var existingID int
+		err := db.QueryRowContext(ctx, "SELECT id FROM categories WHERE LOWER(name) = LOWER($1)", data.Name).Scan(&existingID)
+		if err == nil {
+			respondJSON(w, http.StatusBadRequest, Response{
+				Status:  http.StatusBadRequest,
+				Success: false,
+				Message: "Category already exists",
+			})
+			return
+		} else if err != sql.ErrNoRows {
+			log.Println("Duplicate check error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
 				Status:  http.StatusInternalServerError,
 				Success: false,
-				Message: "Failed to create medicine unit",
+				Message: "Database query error",
 			})
 			return
 		}
 
-		createdUnit.Name = data.Name
-		createdUnit.Status = data.Status
+		// Insert
+		query := `
+			INSERT INTO categories (name, status, created_at)
+			VALUES ($1, $2, $3)
+			RETURNING id, created_at
+		`
+
+		var createdID int
+		var createdAt time.Time
+
+		err = db.QueryRowContext(ctx, query, data.Name, data.Status, time.Now()).Scan(&createdID, &createdAt)
+		if err != nil {
+			log.Println("Insert error:", err)
+			respondJSON(w, http.StatusInternalServerError, Response{
+				Status:  http.StatusInternalServerError,
+				Success: false,
+				Message: "Failed to create category",
+			})
+			return
+		}
 
 		respondJSON(w, http.StatusCreated, Response{
 			Status:  http.StatusCreated,
 			Success: true,
-			Message: "Medicine unit created successfully",
-			Data:    createdUnit,
+			Message: "Category created successfully",
+			Data:    formatCategoryResponse(createdID, data.Name, data.Status, createdAt),
 		})
 	}
 }
 
-// READ - Get all medicine units
-func GetMedicineUnits(db *sql.DB) http.HandlerFunc {
+// GET ALL
+func GetMedicineCategories(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		query := `SELECT id, name, status, created_at FROM medicine_units ORDER BY created_at DESC`
+		query := `SELECT id, name, status, created_at FROM categories ORDER BY id DESC`
 
 		rows, err := db.QueryContext(ctx, query)
 		if err != nil {
-			log.Printf("Error fetching medicine units: %v", err)
+			log.Println("Query error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
 				Status:  http.StatusInternalServerError,
 				Success: false,
-				Message: "Failed to fetch medicine units",
+				Message: "Database error",
 			})
 			return
 		}
 		defer rows.Close()
 
-		// Allocated empty slice instead of nil to output [] in JSON
-		units := make([]models.MedicineUnits, 0)
+		categories := make([]CategoryResponse, 0)
 
 		for rows.Next() {
-			var unit models.MedicineUnits
-			if err := rows.Scan(&unit.ID, &unit.Name, &unit.Status, &unit.CreatedAt); err != nil {
-				log.Printf("Error scanning medicine unit: %v", err)
+			var id, status int
+			var name string
+			var createdAt time.Time
+
+			if err := rows.Scan(&id, &name, &status, &createdAt); err != nil {
+				log.Println("Scan error:", err)
 				respondJSON(w, http.StatusInternalServerError, Response{
 					Status:  http.StatusInternalServerError,
 					Success: false,
-					Message: "Error parsing data",
+					Message: "Database error",
 				})
 				return
 			}
-			units = append(units, unit)
+
+			categories = append(categories, formatCategoryResponse(id, name, status, createdAt))
 		}
 
-		if err = rows.Err(); err != nil {
-			log.Printf("Error iterating rows: %v", err)
+		if err := rows.Err(); err != nil {
+			log.Println("Rows iteration error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
 				Status:  http.StatusInternalServerError,
 				Success: false,
-				Message: "Error fetching data",
+				Message: "Database error",
 			})
 			return
 		}
@@ -163,14 +209,14 @@ func GetMedicineUnits(db *sql.DB) http.HandlerFunc {
 		respondJSON(w, http.StatusOK, Response{
 			Status:  http.StatusOK,
 			Success: true,
-			Message: "Medicine units fetched successfully",
-			Data:    units,
+			Message: "Categories fetched successfully",
+			Data:    categories,
 		})
 	}
 }
 
-// READ - Get single medicine unit by ID
-func GetMedicineUnitByID(db *sql.DB) http.HandlerFunc {
+// GET BY ID
+func GetMedicineCategoryByID(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id, err := getIDFromPath(r)
@@ -183,26 +229,29 @@ func GetMedicineUnitByID(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		query := `SELECT id, name, status, created_at FROM medicine_units WHERE id = $1`
+		query := `SELECT id, name, status, created_at FROM categories WHERE id = $1`
 
-		var unit models.MedicineUnits
-		err = db.QueryRowContext(ctx, query, id).Scan(&unit.ID, &unit.Name, &unit.Status, &unit.CreatedAt)
+		var categoryID, status int
+		var name string
+		var createdAt time.Time
+
+		err = db.QueryRowContext(ctx, query, id).Scan(&categoryID, &name, &status, &createdAt)
 
 		if err == sql.ErrNoRows {
 			respondJSON(w, http.StatusNotFound, Response{
 				Status:  http.StatusNotFound,
 				Success: false,
-				Message: "Medicine unit not found",
+				Message: "Medicine category not found",
 			})
 			return
 		}
 
 		if err != nil {
-			log.Printf("Error fetching medicine unit: %v", err)
+			log.Printf("Error fetching medicine category: %v", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
 				Status:  http.StatusInternalServerError,
 				Success: false,
-				Message: "Failed to fetch medicine unit",
+				Message: "Database error",
 			})
 			return
 		}
@@ -210,14 +259,14 @@ func GetMedicineUnitByID(db *sql.DB) http.HandlerFunc {
 		respondJSON(w, http.StatusOK, Response{
 			Status:  http.StatusOK,
 			Success: true,
-			Message: "Medicine unit fetched successfully",
-			Data:    unit,
+			Message: "Category fetched successfully",
+			Data:    formatCategoryResponse(categoryID, name, status, createdAt),
 		})
 	}
 }
 
-// UPDATE - Update a medicine unit
-func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
+// UPDATE
+func UpdateMedicineCategory(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id, err := getIDFromPath(r)
@@ -230,22 +279,17 @@ func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			Data models.MedicineUnits `json:"data"`
-		}
-
+		var req UpdateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
-				Message: "Invalid request body",
+				Message: "Invalid JSON format",
 			})
 			return
 		}
 
-		data := req.Data
-
-		if err := validateInput(&data); err != nil {
+		if err := validateCategoryInput(req.Name, req.Status); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
@@ -254,33 +298,35 @@ func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Direct UPDATE without pre-checking with SELECT query (Optimized)
 		query := `
-			UPDATE medicine_units 
-			SET name = $1, status = $2 
-			WHERE id = $3 
+			UPDATE categories
+			SET name = $1, status = $2
+			WHERE id = $3
 			RETURNING id, name, status, created_at
 		`
 
-		var updatedUnit models.MedicineUnits
-		err = db.QueryRowContext(ctx, query, data.Name, data.Status, id).
-			Scan(&updatedUnit.ID, &updatedUnit.Name, &updatedUnit.Status, &updatedUnit.CreatedAt)
+		var updatedID, status int
+		var name string
+		var createdAt time.Time
+
+		// FIXED: Scanned into time.Time instead of string to prevent runtime crash
+		err = db.QueryRowContext(ctx, query, req.Name, req.Status, id).Scan(&updatedID, &name, &status, &createdAt)
 
 		if err == sql.ErrNoRows {
 			respondJSON(w, http.StatusNotFound, Response{
 				Status:  http.StatusNotFound,
 				Success: false,
-				Message: "Medicine unit not found",
+				Message: "Category not found",
 			})
 			return
 		}
 
 		if err != nil {
-			log.Printf("Error updating medicine unit: %v", err)
+			log.Println("Update error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
 				Status:  http.StatusInternalServerError,
 				Success: false,
-				Message: "Failed to update medicine unit",
+				Message: "Failed to update category",
 			})
 			return
 		}
@@ -288,14 +334,14 @@ func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 		respondJSON(w, http.StatusOK, Response{
 			Status:  http.StatusOK,
 			Success: true,
-			Message: "Medicine unit updated successfully",
-			Data:    updatedUnit,
+			Message: "Category updated successfully",
+			Data:    formatCategoryResponse(updatedID, name, status, createdAt),
 		})
 	}
 }
 
-// DELETE - Soft delete a medicine unit
-func DeleteMedicineUnits(db *sql.DB) http.HandlerFunc {
+// DELETE
+func DeleteMedicineCategory(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		id, err := getIDFromPath(r)
@@ -308,16 +354,13 @@ func DeleteMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Soft delete directly using RowsAffected check (Optimized)
-		query := `UPDATE medicine_units SET status = 0 WHERE id = $1`
-
-		result, err := db.ExecContext(ctx, query, id)
+		result, err := db.ExecContext(ctx, "DELETE FROM categories WHERE id = $1", id)
 		if err != nil {
-			log.Printf("Error soft deleting medicine unit: %v", err)
+			log.Println("Delete error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
 				Status:  http.StatusInternalServerError,
 				Success: false,
-				Message: "Failed to delete medicine unit",
+				Message: "Failed to delete category",
 			})
 			return
 		}
@@ -327,7 +370,7 @@ func DeleteMedicineUnits(db *sql.DB) http.HandlerFunc {
 			respondJSON(w, http.StatusNotFound, Response{
 				Status:  http.StatusNotFound,
 				Success: false,
-				Message: "Medicine unit not found",
+				Message: "Category not found",
 			})
 			return
 		}
@@ -335,7 +378,7 @@ func DeleteMedicineUnits(db *sql.DB) http.HandlerFunc {
 		respondJSON(w, http.StatusOK, Response{
 			Status:  http.StatusOK,
 			Success: true,
-			Message: "Medicine unit deleted successfully",
+			Message: "Category deleted successfully",
 		})
 	}
 }
