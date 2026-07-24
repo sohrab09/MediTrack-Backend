@@ -8,12 +8,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"meditrack-backend/internal/models"
 )
 
-// Response structure
+// Global Standard API Response structure
 type Response struct {
 	Status  int         `json:"status"`
 	Success bool        `json:"success"`
@@ -30,7 +29,8 @@ func respondJSON(w http.ResponseWriter, status int, res Response) {
 
 // Validation Helper
 func validateInput(data *models.MedicineUnits) error {
-	if strings.TrimSpace(data.Name) == "" {
+	data.Name = strings.TrimSpace(data.Name)
+	if data.Name == "" {
 		return errors.New("name is required")
 	}
 	if data.Status != 0 && data.Status != 1 {
@@ -39,7 +39,7 @@ func validateInput(data *models.MedicineUnits) error {
 	return nil
 }
 
-// Extract ID from path parameter with valid integer check
+// Extract ID from URL Path parameter
 func getIDFromPath(r *http.Request) (int, error) {
 	idStr := r.PathValue("id")
 	if idStr == "" {
@@ -57,23 +57,19 @@ func CreateMedicineUnits(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		var req struct {
-			Data models.MedicineUnits `json:"data"`
-		}
+		var unit models.MedicineUnits
 
-		// Decode request body
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Directly decode JSON without wrapper
+		if err := json.NewDecoder(r.Body).Decode(&unit); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
-				Message: "Invalid request body",
+				Message: "Invalid JSON body format",
 			})
 			return
 		}
 
-		data := req.Data
-
-		if err := validateInput(&data); err != nil {
+		if err := validateInput(&unit); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
@@ -82,16 +78,16 @@ func CreateMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Insert into database with Context
+		// Insert into DB (Letting DB assign created_at timestamp automatically)
 		query := `
 			INSERT INTO medicine_units (name, status, created_at) 
-			VALUES ($1, $2, $3) 
-			RETURNING id, created_at
+			VALUES ($1, $2, NOW()) 
+			RETURNING id, name, status, created_at
 		`
 
 		var createdUnit models.MedicineUnits
-		err := db.QueryRowContext(ctx, query, data.Name, data.Status, time.Now()).
-			Scan(&createdUnit.ID, &createdUnit.CreatedAt)
+		err := db.QueryRowContext(ctx, query, unit.Name, unit.Status).
+			Scan(&createdUnit.ID, &createdUnit.Name, &createdUnit.Status, &createdUnit.CreatedAt)
 
 		if err != nil {
 			log.Printf("Error creating medicine unit: %v", err)
@@ -103,9 +99,6 @@ func CreateMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		createdUnit.Name = data.Name
-		createdUnit.Status = data.Status
-
 		respondJSON(w, http.StatusCreated, Response{
 			Status:  http.StatusCreated,
 			Success: true,
@@ -115,7 +108,7 @@ func CreateMedicineUnits(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// READ - Get all medicine units
+// READ - Get all active/all medicine units
 func GetMedicineUnits(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -133,7 +126,6 @@ func GetMedicineUnits(db *sql.DB) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		// Allocated empty slice instead of nil to output [] in JSON
 		units := make([]models.MedicineUnits, 0)
 
 		for rows.Next() {
@@ -143,7 +135,7 @@ func GetMedicineUnits(db *sql.DB) http.HandlerFunc {
 				respondJSON(w, http.StatusInternalServerError, Response{
 					Status:  http.StatusInternalServerError,
 					Success: false,
-					Message: "Error parsing data",
+					Message: "Error parsing database records",
 				})
 				return
 			}
@@ -155,7 +147,7 @@ func GetMedicineUnits(db *sql.DB) http.HandlerFunc {
 			respondJSON(w, http.StatusInternalServerError, Response{
 				Status:  http.StatusInternalServerError,
 				Success: false,
-				Message: "Error fetching data",
+				Message: "Error reading rows",
 			})
 			return
 		}
@@ -173,6 +165,7 @@ func GetMedicineUnits(db *sql.DB) http.HandlerFunc {
 func GetMedicineUnitByID(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+
 		id, err := getIDFromPath(r)
 		if err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
@@ -220,6 +213,7 @@ func GetMedicineUnitByID(db *sql.DB) http.HandlerFunc {
 func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+
 		id, err := getIDFromPath(r)
 		if err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
@@ -230,22 +224,18 @@ func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		var req struct {
-			Data models.MedicineUnits `json:"data"`
-		}
+		var unit models.MedicineUnits
 
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&unit); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
-				Message: "Invalid request body",
+				Message: "Invalid JSON body format",
 			})
 			return
 		}
 
-		data := req.Data
-
-		if err := validateInput(&data); err != nil {
+		if err := validateInput(&unit); err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
 				Success: false,
@@ -254,7 +244,6 @@ func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Direct UPDATE without pre-checking with SELECT query (Optimized)
 		query := `
 			UPDATE medicine_units 
 			SET name = $1, status = $2 
@@ -263,7 +252,7 @@ func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 		`
 
 		var updatedUnit models.MedicineUnits
-		err = db.QueryRowContext(ctx, query, data.Name, data.Status, id).
+		err = db.QueryRowContext(ctx, query, unit.Name, unit.Status, id).
 			Scan(&updatedUnit.ID, &updatedUnit.Name, &updatedUnit.Status, &updatedUnit.CreatedAt)
 
 		if err == sql.ErrNoRows {
@@ -298,6 +287,7 @@ func UpdateMedicineUnits(db *sql.DB) http.HandlerFunc {
 func DeleteMedicineUnits(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+
 		id, err := getIDFromPath(r)
 		if err != nil {
 			respondJSON(w, http.StatusBadRequest, Response{
@@ -308,7 +298,6 @@ func DeleteMedicineUnits(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Soft delete directly using RowsAffected check (Optimized)
 		query := `UPDATE medicine_units SET status = 0 WHERE id = $1`
 
 		result, err := db.ExecContext(ctx, query, id)
@@ -327,7 +316,7 @@ func DeleteMedicineUnits(db *sql.DB) http.HandlerFunc {
 			respondJSON(w, http.StatusNotFound, Response{
 				Status:  http.StatusNotFound,
 				Success: false,
-				Message: "Medicine unit not found",
+				Message: "Medicine unit not found or already deleted",
 			})
 			return
 		}
