@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"meditrack-backend/internal/handlers/medicine_category"
+	"meditrack-backend/internal/handlers/medicine_leaves"
 	"meditrack-backend/internal/handlers/medicine_types"
 	"meditrack-backend/internal/handlers/medicine_units"
 )
@@ -30,4 +31,11 @@ func RegisterMedicineRoutes(mux *http.ServeMux, prefix string, db *sql.DB) {
 	RegisterRoute(mux, prefix, "GET /medicine-types/{id}", medicine_types.GetMedicineTypesByID(db))
 	RegisterRoute(mux, prefix, "PUT /medicine-types/{id}", medicine_types.UpdateMedicineTypes(db))
 	RegisterRoute(mux, prefix, "DELETE /medicine-types/{id}", medicine_types.DeleteMedicineTypes(db))
+
+	// Medicine Leafs
+	RegisterRoute(mux, prefix, "POST /medicine-leaves", medicine_leaves.CreateMedicineLeaf(db))
+	RegisterRoute(mux, prefix, "GET /medicine-leaves", medicine_leaves.GetMedicineLeaves(db))
+	RegisterRoute(mux, prefix, "GET /medicine-leaves/{id}", medicine_leaves.GetMedicineLeafByID(db))
+	RegisterRoute(mux, prefix, "PUT /medicine-leaves/{id}", medicine_leaves.UpdateMedicineLeaf(db))
+	RegisterRoute(mux, prefix, "DELETE /medicine-leaves/{id}", medicine_leaves.DeleteMedicineLeaf(db))
 }
