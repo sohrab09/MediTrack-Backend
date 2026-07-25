@@ -17,6 +17,7 @@ func SetupRoutes(mux *http.ServeMux, db *sql.DB) http.Handler {
 	})
 
 	// Feature-wise Route Group Integration
+	RegisterMenuRoutes(mux, apiPrefix, db)
 	RegisterAuthRoutes(mux, apiPrefix, db)
 	RegisterUserRoutes(mux, apiPrefix, db)
 	RegisterMedicineRoutes(mux, apiPrefix, db)
