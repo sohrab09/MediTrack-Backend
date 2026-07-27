@@ -110,7 +110,7 @@ func CreateMedicineCategories(db *sql.DB) http.HandlerFunc {
 
 		// Duplicate Check with Context
 		var existingID int
-		err := db.QueryRowContext(ctx, "SELECT id FROM categories WHERE LOWER(name) = LOWER($1)", data.Name).Scan(&existingID)
+		err := db.QueryRowContext(ctx, "SELECT id FROM medicine_categories WHERE LOWER(name) = LOWER($1)", data.Name).Scan(&existingID)
 		if err == nil {
 			respondJSON(w, http.StatusBadRequest, Response{
 				Status:  http.StatusBadRequest,
@@ -130,7 +130,7 @@ func CreateMedicineCategories(db *sql.DB) http.HandlerFunc {
 
 		// Insert
 		query := `
-			INSERT INTO categories (name, status, created_at)
+			INSERT INTO medicine_categories (name, status, created_at)
 			VALUES ($1, $2, $3)
 			RETURNING id, created_at
 		`
@@ -162,7 +162,7 @@ func CreateMedicineCategories(db *sql.DB) http.HandlerFunc {
 func GetMedicineCategories(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		query := `SELECT id, name, status, created_at FROM categories ORDER BY id DESC`
+		query := `SELECT id, name, status, created_at FROM medicine_categories ORDER BY id DESC`
 
 		rows, err := db.QueryContext(ctx, query)
 		if err != nil {
@@ -229,7 +229,7 @@ func GetMedicineCategoryByID(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		query := `SELECT id, name, status, created_at FROM categories WHERE id = $1`
+		query := `SELECT id, name, status, created_at FROM medicine_categories WHERE id = $1`
 
 		var categoryID, status int
 		var name string
@@ -299,7 +299,7 @@ func UpdateMedicineCategory(db *sql.DB) http.HandlerFunc {
 		}
 
 		query := `
-			UPDATE categories
+			UPDATE medicine_categories
 			SET name = $1, status = $2
 			WHERE id = $3
 			RETURNING id, name, status, created_at
@@ -354,7 +354,7 @@ func DeleteMedicineCategory(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		result, err := db.ExecContext(ctx, "DELETE FROM categories WHERE id = $1", id)
+		result, err := db.ExecContext(ctx, "DELETE FROM medicine_categories WHERE id = $1", id)
 		if err != nil {
 			log.Println("Delete error:", err)
 			respondJSON(w, http.StatusInternalServerError, Response{
