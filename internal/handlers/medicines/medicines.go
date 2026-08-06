@@ -3,6 +3,7 @@ package medicines
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
 	"meditrack-backend/internal/models"
 	"net/http"
 	"strconv"
@@ -45,6 +46,7 @@ func AddMedicineHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		var m models.Medicine
+
 		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 			writeJSON(w, http.StatusBadRequest, Response{
 				Status:  false,
@@ -54,44 +56,201 @@ func AddMedicineHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// ----------------------------
 		// Validation
+		// ----------------------------
 		if strings.TrimSpace(m.Name) == "" {
 			writeJSON(w, http.StatusBadRequest, Response{
 				Status:  false,
 				Message: "Validation Error",
-				Error:   "Medicine Name is required",
-			})
-			return
-		}
-		if m.CategoryID <= 0 || m.BoxSizeID <= 0 || m.UnitID <= 0 {
-			writeJSON(w, http.StatusBadRequest, Response{
-				Status:  false,
-				Message: "Validation Error",
-				Error:   "Category, Box Size, and Unit are required fields",
+				Error:   "Medicine name is required",
 			})
 			return
 		}
 
-		// Default values handling
+		if m.CategoryID <= 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Category is required",
+			})
+			return
+		}
+
+		if m.BoxSizeID <= 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Box Size is required",
+			})
+			return
+		}
+
+		if m.UnitID <= 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Unit is required",
+			})
+			return
+		}
+
+		if m.MRP <= 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "MRP must be greater than zero",
+			})
+			return
+		}
+
+		if m.SellingPrice <= 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Selling Price must be greater than zero",
+			})
+			return
+		}
+
+		if m.SellingPrice > m.MRP {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Selling Price cannot be greater than MRP",
+			})
+			return
+		}
+
+		if m.MinimumStock < 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Minimum Stock cannot be negative",
+			})
+			return
+		}
+
+		// ----------------------------
+		// Default Values
+		// ----------------------------
 		if m.Status == 0 {
 			m.Status = 1
 		}
 
-		// মেডিসিন প্রথম তৈরি হওয়ার সময় StockQuantity হবে OpeningStock-এর সমান
-		m.StockQuantity = m.OpeningStock
+		m.CurrentStock = 0
 
-		query := `
-			INSERT INTO medicines 
-			(name, strength, generic, category_id, type_id, box_size_id, unit_id, leaf_id, price, discount, tax, vat, opening_stock, stock_quantity, status)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-			RETURNING id, created_at, updated_at
-		`
+		// ----------------------------
+		// Duplicate Check
+		// ----------------------------
+		var existingID int
 
 		err := db.QueryRow(
+			`
+			SELECT id
+			FROM medicines
+			WHERE LOWER(name)=LOWER($1)
+			AND COALESCE(strength,'')=COALESCE($2,'')
+			AND status=1
+			LIMIT 1
+			`,
+			m.Name,
+			m.Strength,
+		).Scan(&existingID)
+
+		if err == nil {
+			writeJSON(w, http.StatusConflict, Response{
+				Status:  false,
+				Message: "Duplicate Medicine",
+				Error:   "Medicine already exists",
+			})
+			return
+		}
+
+		if err != sql.ErrNoRows {
+			writeJSON(w, http.StatusInternalServerError, Response{
+				Status:  false,
+				Message: "Database Error",
+				Error:   err.Error(),
+			})
+			return
+		}
+
+		// ----------------------------
+		// Generate Medicine Code
+		// (Temporary)
+		// ----------------------------
+		err = db.QueryRow(`
+			SELECT
+			'MED' || LPAD((COALESCE(MAX(id),0)+1)::TEXT,6,'0')
+			FROM medicines
+		`).Scan(&m.Code)
+
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, Response{
+				Status:  false,
+				Message: "Database Error",
+				Error:   "Failed to generate medicine code",
+			})
+			return
+		}
+
+		// ----------------------------
+		// Insert
+		// ----------------------------
+		query := `
+		INSERT INTO medicines
+		(
+			code,
+			barcode,
+			name,
+			strength,
+			generic,
+			category_id,
+			type_id,
+			box_size_id,
+			unit_id,
+			leaf_id,
+			selling_price,
+			mrp,
+			current_stock,
+			minimum_stock,
+			status
+		)
+		VALUES
+		(
+			$1,$2,$3,$4,$5,
+			$6,$7,$8,$9,$10,
+			$11,$12,$13,$14,$15
+		)
+		RETURNING
+			id,
+			created_at,
+			updated_at
+		`
+
+		err = db.QueryRow(
 			query,
-			m.Name, m.Strength, m.Generic, m.CategoryID, m.TypeID, m.BoxSizeID,
-			m.UnitID, m.LeafID, m.Price, m.Discount, m.Tax, m.Vat, m.OpeningStock, m.StockQuantity, m.Status,
-		).Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt)
+			m.Code,
+			m.Barcode,
+			m.Name,
+			m.Strength,
+			m.Generic,
+			m.CategoryID,
+			m.TypeID,
+			m.BoxSizeID,
+			m.UnitID,
+			m.LeafID,
+			m.SellingPrice,
+			m.MRP,
+			m.CurrentStock,
+			m.MinimumStock,
+			m.Status,
+		).Scan(
+			&m.ID,
+			&m.CreatedAt,
+			&m.UpdatedAt,
+		)
 
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, Response{
@@ -125,9 +284,27 @@ func GetMedicinesHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		query := `
-			SELECT id, name, strength, generic, category_id, type_id, box_size_id, unit_id, leaf_id, 
-				   price, discount, tax, vat, opening_stock, stock_quantity, status, created_at, updated_at 
-			FROM medicines 
+			SELECT
+				id,
+				code,
+				barcode,
+				name,
+				strength,
+				generic,
+				category_id,
+				type_id,
+				box_size_id,
+				unit_id,
+				leaf_id,
+				selling_price,
+				mrp,
+				current_stock,
+				minimum_stock,
+				status,
+				created_at,
+				updated_at
+			FROM medicines
+			WHERE status IN (0,1)
 			ORDER BY id DESC
 		`
 
@@ -143,13 +320,31 @@ func GetMedicinesHandler(db *sql.DB) http.HandlerFunc {
 		defer rows.Close()
 
 		var medicinesList []models.Medicine
+
 		for rows.Next() {
 			var m models.Medicine
+
 			err := rows.Scan(
-				&m.ID, &m.Name, &m.Strength, &m.Generic, &m.CategoryID, &m.TypeID, &m.BoxSizeID,
-				&m.UnitID, &m.LeafID, &m.Price, &m.Discount, &m.Tax, &m.Vat,
-				&m.OpeningStock, &m.StockQuantity, &m.Status, &m.CreatedAt, &m.UpdatedAt,
+				&m.ID,
+				&m.Code,
+				&m.Barcode,
+				&m.Name,
+				&m.Strength,
+				&m.Generic,
+				&m.CategoryID,
+				&m.TypeID,
+				&m.BoxSizeID,
+				&m.UnitID,
+				&m.LeafID,
+				&m.SellingPrice,
+				&m.MRP,
+				&m.CurrentStock,
+				&m.MinimumStock,
+				&m.Status,
+				&m.CreatedAt,
+				&m.UpdatedAt,
 			)
+
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, Response{
 					Status:  false,
@@ -158,6 +353,7 @@ func GetMedicinesHandler(db *sql.DB) http.HandlerFunc {
 				})
 				return
 			}
+
 			medicinesList = append(medicinesList, m)
 		}
 
@@ -207,17 +403,50 @@ func GetMedicineByIDHandler(db *sql.DB) http.HandlerFunc {
 		}
 
 		query := `
-			SELECT id, name, strength, generic, category_id, type_id, box_size_id, unit_id, leaf_id, 
-				   price, discount, tax, vat, opening_stock, stock_quantity, status, created_at, updated_at 
-			FROM medicines 
-			WHERE id = $1
+			SELECT
+				id,
+				code,
+				barcode,
+				name,
+				strength,
+				generic,
+				category_id,
+				type_id,
+				box_size_id,
+				unit_id,
+				leaf_id,
+				selling_price,
+				mrp,
+				current_stock,
+				minimum_stock,
+				status,
+				created_at,
+				updated_at
+			FROM medicines
+			WHERE id = $1 AND status = 1
 		`
 
 		var m models.Medicine
+
 		err = db.QueryRow(query, id).Scan(
-			&m.ID, &m.Name, &m.Strength, &m.Generic, &m.CategoryID, &m.TypeID, &m.BoxSizeID,
-			&m.UnitID, &m.LeafID, &m.Price, &m.Discount, &m.Tax, &m.Vat,
-			&m.OpeningStock, &m.StockQuantity, &m.Status, &m.CreatedAt, &m.UpdatedAt,
+			&m.ID,
+			&m.Code,
+			&m.Barcode,
+			&m.Name,
+			&m.Strength,
+			&m.Generic,
+			&m.CategoryID,
+			&m.TypeID,
+			&m.BoxSizeID,
+			&m.UnitID,
+			&m.LeafID,
+			&m.SellingPrice,
+			&m.MRP,
+			&m.CurrentStock,
+			&m.MinimumStock,
+			&m.Status,
+			&m.CreatedAt,
+			&m.UpdatedAt,
 		)
 
 		if err == sql.ErrNoRows {
@@ -227,7 +456,9 @@ func GetMedicineByIDHandler(db *sql.DB) http.HandlerFunc {
 				Error:   "Medicine not found",
 			})
 			return
-		} else if err != nil {
+		}
+
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, Response{
 				Status:  false,
 				Message: "Database Error",
@@ -271,7 +502,7 @@ func UpdateMedicineHandler(db *sql.DB) http.HandlerFunc {
 		var m models.Medicine
 		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 			errMsg := err.Error()
-			if err.Error() == "EOF" {
+			if err == io.EOF {
 				errMsg = "Request body is empty. Please provide medicine data in JSON format."
 			}
 
@@ -283,6 +514,7 @@ func UpdateMedicineHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		// Validation
 		if strings.TrimSpace(m.Name) == "" {
 			writeJSON(w, http.StatusBadRequest, Response{
 				Status:  false,
@@ -292,23 +524,85 @@ func UpdateMedicineHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
+		if m.CategoryID <= 0 || m.BoxSizeID <= 0 || m.UnitID <= 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Category, Box Size and Unit are required",
+			})
+			return
+		}
+
+		if m.SellingPrice < 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Selling Price cannot be negative",
+			})
+			return
+		}
+
+		if m.MRP < 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "MRP cannot be negative",
+			})
+			return
+		}
+
+		if m.MinimumStock < 0 {
+			writeJSON(w, http.StatusBadRequest, Response{
+				Status:  false,
+				Message: "Validation Error",
+				Error:   "Minimum Stock cannot be negative",
+			})
+			return
+		}
+
 		m.ID = id
 
-		// দ্রষ্টব্য: সাধারণ Update API-তে opening_stock এবং stock_quantity ম্যানুয়ালি চেঞ্জ করতে দেওয়া উচিত নয়,
 		query := `
-			UPDATE medicines 
-			SET name = $1, strength = $2, generic = $3, category_id = $4, type_id = $5, 
-				box_size_id = $6, unit_id = $7, leaf_id = $8, price = $9, discount = $10, 
-				tax = $11, vat = $12, status = $13, updated_at = CURRENT_TIMESTAMP
-			WHERE id = $14
-			RETURNING created_at, updated_at, opening_stock, stock_quantity
+			UPDATE medicines
+			SET
+				name=$1,
+				strength=$2,
+				generic=$3,
+				category_id=$4,
+				type_id=$5,
+				box_size_id=$6,
+				unit_id=$7,
+				leaf_id=$8,
+				selling_price=$9,
+				mrp=$10,
+				status=$11,
+				updated_at=CURRENT_TIMESTAMP
+			WHERE id=$12
+			RETURNING
+				current_stock,
+				created_at,
+				updated_at
 		`
 
 		err = db.QueryRow(
 			query,
-			m.Name, m.Strength, m.Generic, m.CategoryID, m.TypeID, m.BoxSizeID,
-			m.UnitID, m.LeafID, m.Price, m.Discount, m.Tax, m.Vat, m.Status, m.ID,
-		).Scan(&m.CreatedAt, &m.UpdatedAt, &m.OpeningStock, &m.StockQuantity)
+			m.Name,
+			m.Strength,
+			m.Generic,
+			m.CategoryID,
+			m.TypeID,
+			m.BoxSizeID,
+			m.UnitID,
+			m.LeafID,
+			m.SellingPrice,
+			m.MRP,
+			m.Status,
+			m.ID,
+		).Scan(
+			&m.CurrentStock,
+			&m.CreatedAt,
+			&m.UpdatedAt,
+		)
 
 		if err == sql.ErrNoRows {
 			writeJSON(w, http.StatusNotFound, Response{
@@ -317,7 +611,9 @@ func UpdateMedicineHandler(db *sql.DB) http.HandlerFunc {
 				Error:   "Medicine not found",
 			})
 			return
-		} else if err != nil {
+		}
+
+		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, Response{
 				Status:  false,
 				Message: "Database Error",
@@ -335,7 +631,8 @@ func UpdateMedicineHandler(db *sql.DB) http.HandlerFunc {
 }
 
 // -------------------------------------------------------------
-// 5. DELETE MEDICINE (DELETE /api/v1/medicines/{id})
+// 5. DELETE MEDICINE (SOFT DELETE)
+// DELETE /api/v1/medicines/{id}
 // -------------------------------------------------------------
 func DeleteMedicineHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -358,7 +655,15 @@ func DeleteMedicineHandler(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		result, err := db.Exec("DELETE FROM medicines WHERE id = $1", id)
+		query := `
+			UPDATE medicines
+			SET
+				status = 0,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE id = $1 AND status = 1
+		`
+
+		result, err := db.Exec(query, id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, Response{
 				Status:  false,
@@ -382,7 +687,7 @@ func DeleteMedicineHandler(db *sql.DB) http.HandlerFunc {
 			writeJSON(w, http.StatusNotFound, Response{
 				Status:  false,
 				Message: "Not Found",
-				Error:   "Medicine not found",
+				Error:   "Medicine not found or already deleted",
 			})
 			return
 		}

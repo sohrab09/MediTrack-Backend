@@ -3,22 +3,28 @@ package models
 import "time"
 
 type Medicine struct {
-	ID            int       `json:"id"`
-	Name          string    `json:"name"`
-	Strength      string    `json:"strength,omitempty"`
-	Generic       string    `json:"generic,omitempty"`
-	CategoryID    int       `json:"category_id"`
-	TypeID        *int      `json:"type_id,omitempty"`
-	BoxSizeID     int       `json:"box_size_id"`
-	UnitID        int       `json:"unit_id"`
-	LeafID        *int      `json:"leaf_id,omitempty"`
-	Price         float64   `json:"price"`
-	Discount      float64   `json:"discount"`
-	Tax           float64   `json:"tax"`
-	Vat           float64   `json:"vat"`
-	OpeningStock  int       `json:"opening_stock"`  // প্রাথমিক স্টক (Request body তে আসবে)
-	StockQuantity int       `json:"stock_quantity"` // বর্তমান স্টক
-	Status        int       `json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID      int     `json:"id"`
+	Code    string  `json:"code"`
+	Barcode *string `json:"barcode,omitempty"`
+
+	Name     string `json:"name"`
+	Strength string `json:"strength,omitempty"`
+	Generic  string `json:"generic,omitempty"`
+
+	CategoryID int  `json:"category_id"`
+	TypeID     *int `json:"type_id,omitempty"`
+	BoxSizeID  int  `json:"box_size_id"`
+	UnitID     int  `json:"unit_id"`
+	LeafID     *int `json:"leaf_id,omitempty"`
+
+	SellingPrice float64 `json:"selling_price"`
+	MRP          float64 `json:"mrp"`
+
+	CurrentStock int `json:"current_stock"`
+	MinimumStock int `json:"minimum_stock"`
+
+	Status int `json:"status"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
