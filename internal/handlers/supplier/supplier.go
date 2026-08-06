@@ -13,23 +13,24 @@ import (
 )
 
 type Response struct {
-	Status  int         `json:"status"`
-	Success bool        `json:"success"`
+	Status  bool        `json:"status"`
+	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
+	Error   string      `json:"error,omitempty"`
 }
 
 type CreateSupplierRequest struct {
-	SupplierName    string  `json:"supplierName"`
-	Mobile          string  `json:"mobile"`
-	Email           string  `json:"email"`
-	ContactPerson   string  `json:"contactPerson"`
-	Address         string  `json:"address"`
-	City            string  `json:"city"`
-	State           string  `json:"state"`
-	Zip             string  `json:"zip"`
-	Country         string  `json:"country"`
-	PreviousBalance float64 `json:"previousBalance"`
+	SupplierName   string  `json:"supplierName"`
+	Mobile         string  `json:"mobile"`
+	Email          string  `json:"email"`
+	ContactPerson  string  `json:"contactPerson"`
+	Address        string  `json:"address"`
+	City           string  `json:"city"`
+	State          string  `json:"state"`
+	Zip            string  `json:"zip"`
+	Country        string  `json:"country"`
+	OpeningBalance float64 `json:"openingBalance"`
 }
 
 type UpdateSupplierRequest struct {
@@ -46,18 +47,30 @@ type UpdateSupplierRequest struct {
 	Status         int     `json:"status"`
 }
 
-func respondJSON(w http.ResponseWriter, status int, res Response) {
+func respondJSON(w http.ResponseWriter, statusCode int, res Response) {
+	res.Code = statusCode
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(res)
+	w.WriteHeader(statusCode)
+
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		log.Println("Failed to encode response:", err)
+	}
 }
 
 func parseIDFromURL(r *http.Request) (int, error) {
 	idStr := r.PathValue("id")
+
 	if idStr == "" {
 		idStr = path.Base(r.URL.Path)
 	}
-	return strconv.Atoi(idStr)
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		return 0, errors.New("invalid supplier id")
+	}
+
+	return id, nil
 }
 
 func validateSupplier(name, mobile string) error {
@@ -65,14 +78,35 @@ func validateSupplier(name, mobile string) error {
 	mobile = strings.TrimSpace(mobile)
 
 	if name == "" {
-		return errors.New("Supplier name is required")
+		return errors.New("supplier name is required")
 	}
 
 	if mobile == "" {
-		return errors.New("Mobile number is required")
+		return errors.New("mobile number is required")
 	}
 
 	return nil
+}
+
+func respondError(w http.ResponseWriter, statusCode int, message string, err error) {
+	res := Response{
+		Status:  false,
+		Message: message,
+	}
+
+	if err != nil {
+		res.Error = err.Error()
+	}
+
+	respondJSON(w, statusCode, res)
+}
+
+func respondSuccess(w http.ResponseWriter, statusCode int, message string, data interface{}) {
+	respondJSON(w, statusCode, Response{
+		Status:  true,
+		Message: message,
+		Data:    data,
+	})
 }
 
 func CreateSupplier(db *sql.DB) http.HandlerFunc {
@@ -80,279 +114,71 @@ func CreateSupplier(db *sql.DB) http.HandlerFunc {
 		ctx := r.Context()
 
 		var req CreateSupplierRequest
+
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			respondJSON(w, http.StatusBadRequest, Response{
-				Status:  http.StatusBadRequest,
-				Success: false,
-				Message: "Invalid request payload",
-			})
+			respondError(
+				w,
+				http.StatusBadRequest,
+				"Invalid request payload",
+				err,
+			)
 			return
 		}
 
-		if strings.TrimSpace(req.SupplierName) == "" {
-			respondJSON(w, http.StatusBadRequest, Response{
-				Status:  http.StatusBadRequest,
-				Success: false,
-				Message: "Supplier name is required",
-			})
+		// Trim Input
+		req.SupplierName = strings.TrimSpace(req.SupplierName)
+		req.Mobile = strings.TrimSpace(req.Mobile)
+		req.Email = strings.TrimSpace(req.Email)
+		req.ContactPerson = strings.TrimSpace(req.ContactPerson)
+		req.Address = strings.TrimSpace(req.Address)
+		req.City = strings.TrimSpace(req.City)
+		req.State = strings.TrimSpace(req.State)
+		req.Zip = strings.TrimSpace(req.Zip)
+		req.Country = strings.TrimSpace(req.Country)
+
+		// Validation
+		if err := validateSupplier(req.SupplierName, req.Mobile); err != nil {
+			respondError(
+				w,
+				http.StatusBadRequest,
+				err.Error(),
+				err,
+			)
 			return
 		}
 
-		if strings.TrimSpace(req.Mobile) == "" {
-			respondJSON(w, http.StatusBadRequest, Response{
-				Status:  http.StatusBadRequest,
-				Success: false,
-				Message: "Mobile number is required",
-			})
-			return
+		if req.Country == "" {
+			req.Country = "Bangladesh"
 		}
 
 		query := `
 			INSERT INTO suppliers (
-				supplier_name, mobile, email, contact_person, address, 
-				city, state, zip, country, opening_balance, current_balance, created_at, updated_at
-			) 
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+				supplier_name,
+				mobile,
+				email,
+				contact_person,
+				address,
+				city,
+				state,
+				zip,
+				country,
+				opening_balance,
+				current_balance,
+				created_at,
+				updated_at
+			)
+			VALUES (
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),NOW()
+			)
 			RETURNING id, created_at
 		`
 
-		var createdID int
+		var supplierID int
 		var createdAt time.Time
-		now := time.Now()
-
-		country := req.Country
-		if country == "" {
-			country = "Bangladesh"
-		}
 
 		err := db.QueryRowContext(
-			ctx, query,
-			req.SupplierName, req.Mobile, req.Email, req.ContactPerson, req.Address,
-			req.City, req.State, req.Zip, country, req.PreviousBalance, req.PreviousBalance, now, now,
-		).Scan(&createdID, &createdAt)
-
-		if err != nil {
-			log.Println("Error inserting supplier:", err)
-			respondJSON(w, http.StatusInternalServerError, Response{
-				Status:  http.StatusInternalServerError,
-				Success: false,
-				Message: "Failed to create supplier",
-			})
-			return
-		}
-
-		respondJSON(w, http.StatusCreated, Response{
-			Status:  http.StatusCreated,
-			Success: true,
-			Message: "Supplier added successfully",
-			Data: map[string]interface{}{
-				"id":           createdID,
-				"supplierName": req.SupplierName,
-				"mobile":       req.Mobile,
-				"createdAt":    createdAt.Format(time.RFC3339),
-			},
-		})
-	}
-}
-
-func GetSuppliers(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		query := `
-			SELECT id, supplier_name, mobile, email, contact_person, address, 
-			       city, state, zip, country, opening_balance, current_balance, status, created_at
-			FROM suppliers 
-			ORDER BY id DESC
-		`
-
-		rows, err := db.QueryContext(ctx, query)
-		if err != nil {
-			log.Println("Error fetching suppliers:", err)
-			respondJSON(w, http.StatusInternalServerError, Response{
-				Status:  http.StatusInternalServerError,
-				Success: false,
-				Message: "Failed to fetch suppliers",
-			})
-			return
-		}
-		defer rows.Close()
-
-		supplierList := make([]map[string]interface{}, 0)
-
-		for rows.Next() {
-			var id, status int
-			var name, mobile, email, contactPerson, address, city, state, zip, country string
-			var openingBal, currentBal float64
-			var createdAt time.Time
-
-			err := rows.Scan(
-				&id, &name, &mobile, &email, &contactPerson, &address,
-				&city, &state, &zip, &country, &openingBal, &currentBal, &status, &createdAt,
-			)
-			if err != nil {
-				log.Println("Scan error:", err)
-				continue
-			}
-
-			supplierList = append(supplierList, map[string]interface{}{
-				"id":             id,
-				"supplierName":   name,
-				"mobile":         mobile,
-				"email":          email,
-				"contactPerson":  contactPerson,
-				"address":        address,
-				"city":           city,
-				"state":          state,
-				"zip":            zip,
-				"country":        country,
-				"openingBalance": openingBal,
-				"currentBalance": currentBal,
-				"status":         status,
-				"createdAt":      createdAt.Format(time.RFC3339),
-			})
-		}
-
-		if err := rows.Err(); err != nil {
-			log.Println("Error during row iteration:", err)
-			respondJSON(w, http.StatusInternalServerError, Response{
-				Status:  http.StatusInternalServerError,
-				Success: false,
-				Message: "Error processing supplier rows",
-			})
-			return
-		}
-
-		respondJSON(w, http.StatusOK, Response{
-			Status:  http.StatusOK,
-			Success: true,
-			Message: "Suppliers retrieved successfully",
-			Data:    supplierList,
-		})
-	}
-}
-
-func GetSupplierByID(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		id, err := parseIDFromURL(r)
-		if err != nil || id <= 0 {
-			respondJSON(w, http.StatusBadRequest, Response{
-				Status:  http.StatusBadRequest,
-				Success: false,
-				Message: "Invalid supplier ID",
-			})
-			return
-		}
-
-		query := `
-			SELECT id, supplier_name, mobile, email, contact_person, address, 
-			       city, state, zip, country, opening_balance, current_balance, status, created_at, updated_at
-			FROM suppliers 
-			WHERE id = $1
-		`
-
-		var s map[string]interface{}
-		var supplierID, status int
-		var name, mobile, email, contactPerson, address, city, state, zip, country string
-		var openingBal, currentBal float64
-		var createdAt, updatedAt time.Time
-
-		err = db.QueryRowContext(ctx, query, id).Scan(
-			&supplierID, &name, &mobile, &email, &contactPerson, &address,
-			&city, &state, &zip, &country, &openingBal, &currentBal, &status, &createdAt, &updatedAt,
-		)
-
-		if err == sql.ErrNoRows {
-			respondJSON(w, http.StatusNotFound, Response{
-				Status:  http.StatusNotFound,
-				Success: false,
-				Message: "Supplier not found",
-			})
-			return
-		} else if err != nil {
-			log.Println("Error fetching supplier by ID:", err)
-			respondJSON(w, http.StatusInternalServerError, Response{
-				Status:  http.StatusInternalServerError,
-				Success: false,
-				Message: "Failed to fetch supplier details",
-			})
-			return
-		}
-
-		s = map[string]interface{}{
-			"id":             supplierID,
-			"supplierName":   name,
-			"mobile":         mobile,
-			"email":          email,
-			"contactPerson":  contactPerson,
-			"address":        address,
-			"city":           city,
-			"state":          state,
-			"zip":            zip,
-			"country":        country,
-			"openingBalance": openingBal,
-			"currentBalance": currentBal,
-			"status":         status,
-			"createdAt":      createdAt.Format(time.RFC3339),
-			"updatedAt":      updatedAt.Format(time.RFC3339),
-		}
-
-		respondJSON(w, http.StatusOK, Response{
-			Status:  http.StatusOK,
-			Success: true,
-			Message: "Supplier details fetched successfully",
-			Data:    s,
-		})
-	}
-}
-
-func UpdateSupplier(db *sql.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		id, err := parseIDFromURL(r)
-		if err != nil || id <= 0 {
-			respondJSON(w, http.StatusBadRequest, Response{
-				Status:  http.StatusBadRequest,
-				Success: false,
-				Message: "Invalid supplier ID",
-			})
-			return
-		}
-
-		var req UpdateSupplierRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			respondJSON(w, http.StatusBadRequest, Response{
-				Status:  http.StatusBadRequest,
-				Success: false,
-				Message: "Invalid JSON request body",
-			})
-			return
-		}
-
-		// SQL UPDATE Query
-		query := `
-			UPDATE suppliers 
-			SET supplier_name = $1,
-			    mobile = $2,
-			    email = $3,
-			    contact_person = $4,
-			    address = $5,
-			    city = $6,
-			    state = $7,
-			    zip = $8,
-			    country = $9,
-			    opening_balance = $10,
-			    status = $11,        -- 💡 এইখানে স্ট্যাটাস আপডেট হচ্ছে (০ থেকে ১ হবে)
-			    updated_at = $12
-			WHERE id = $13
-		`
-
-		now := time.Now()
-
-		result, err := db.ExecContext(ctx, query,
+			ctx,
+			query,
 			req.SupplierName,
 			req.Mobile,
 			req.Email,
@@ -363,36 +189,421 @@ func UpdateSupplier(db *sql.DB) http.HandlerFunc {
 			req.Zip,
 			req.Country,
 			req.OpeningBalance,
-			req.Status, // 💡 ফ্রন্টএন্ড থেকে আসা status (1) বসবে
-			now,
+			req.OpeningBalance,
+		).Scan(
+			&supplierID,
+			&createdAt,
+		)
+
+		if err != nil {
+			log.Println("CreateSupplier:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to create supplier",
+				err,
+			)
+			return
+		}
+
+		respondSuccess(
+			w,
+			http.StatusCreated,
+			"Supplier created successfully",
+			map[string]interface{}{
+				"id":             supplierID,
+				"supplierName":   req.SupplierName,
+				"mobile":         req.Mobile,
+				"openingBalance": req.OpeningBalance,
+				"currentBalance": req.OpeningBalance,
+				"createdAt":      createdAt.Format(time.RFC3339),
+			},
+		)
+	}
+}
+
+func GetSuppliers(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		query := `
+			SELECT
+				id,
+				supplier_name,
+				mobile,
+				email,
+				contact_person,
+				address,
+				city,
+				state,
+				zip,
+				country,
+				opening_balance,
+				current_balance,
+				status,
+				created_at,
+				updated_at
+			FROM suppliers
+			ORDER BY id DESC
+		`
+
+		rows, err := db.QueryContext(ctx, query)
+		if err != nil {
+			log.Println("GetSuppliers:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to fetch suppliers",
+				err,
+			)
+			return
+		}
+		defer rows.Close()
+
+		suppliers := make([]map[string]interface{}, 0)
+
+		for rows.Next() {
+
+			var (
+				id           int
+				supplierName string
+				mobile       string
+
+				email         sql.NullString
+				contactPerson sql.NullString
+				address       sql.NullString
+				city          sql.NullString
+				state         sql.NullString
+				zip           sql.NullString
+				country       sql.NullString
+
+				openingBalance float64
+				currentBalance float64
+				status         int
+
+				createdAt time.Time
+				updatedAt time.Time
+			)
+
+			err := rows.Scan(
+				&id,
+				&supplierName,
+				&mobile,
+				&email,
+				&contactPerson,
+				&address,
+				&city,
+				&state,
+				&zip,
+				&country,
+				&openingBalance,
+				&currentBalance,
+				&status,
+				&createdAt,
+				&updatedAt,
+			)
+
+			if err != nil {
+				log.Println("GetSuppliers Scan:", err)
+				continue
+			}
+
+			suppliers = append(suppliers, map[string]interface{}{
+				"id":             id,
+				"supplierName":   supplierName,
+				"mobile":         mobile,
+				"email":          email.String,
+				"contactPerson":  contactPerson.String,
+				"address":        address.String,
+				"city":           city.String,
+				"state":          state.String,
+				"zip":            zip.String,
+				"country":        country.String,
+				"openingBalance": openingBalance,
+				"currentBalance": currentBalance,
+				"status":         status,
+				"createdAt":      createdAt.Format(time.RFC3339),
+				"updatedAt":      updatedAt.Format(time.RFC3339),
+			})
+		}
+
+		if err := rows.Err(); err != nil {
+			log.Println("GetSuppliers Rows:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to process suppliers",
+				err,
+			)
+			return
+		}
+
+		respondSuccess(
+			w,
+			http.StatusOK,
+			"Suppliers retrieved successfully",
+			suppliers,
+		)
+	}
+}
+
+func GetSupplierByID(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		id, err := parseIDFromURL(r)
+		if err != nil {
+			respondError(
+				w,
+				http.StatusBadRequest,
+				"Invalid supplier ID",
+				err,
+			)
+			return
+		}
+
+		query := `
+			SELECT
+				id,
+				supplier_name,
+				mobile,
+				email,
+				contact_person,
+				address,
+				city,
+				state,
+				zip,
+				country,
+				opening_balance,
+				current_balance,
+				status,
+				created_at,
+				updated_at
+			FROM suppliers
+			WHERE id = $1
+		`
+
+		var (
+			supplierID   int
+			supplierName string
+			mobile       string
+
+			email         sql.NullString
+			contactPerson sql.NullString
+			address       sql.NullString
+			city          sql.NullString
+			state         sql.NullString
+			zip           sql.NullString
+			country       sql.NullString
+
+			openingBalance float64
+			currentBalance float64
+			status         int
+
+			createdAt time.Time
+			updatedAt time.Time
+		)
+
+		err = db.QueryRowContext(ctx, query, id).Scan(
+			&supplierID,
+			&supplierName,
+			&mobile,
+			&email,
+			&contactPerson,
+			&address,
+			&city,
+			&state,
+			&zip,
+			&country,
+			&openingBalance,
+			&currentBalance,
+			&status,
+			&createdAt,
+			&updatedAt,
+		)
+
+		if err != nil {
+
+			if errors.Is(err, sql.ErrNoRows) {
+				respondError(
+					w,
+					http.StatusNotFound,
+					"Supplier not found",
+					err,
+				)
+				return
+			}
+
+			log.Println("GetSupplierByID:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to fetch supplier",
+				err,
+			)
+			return
+		}
+
+		supplier := map[string]interface{}{
+			"id":             supplierID,
+			"supplierName":   supplierName,
+			"mobile":         mobile,
+			"email":          email.String,
+			"contactPerson":  contactPerson.String,
+			"address":        address.String,
+			"city":           city.String,
+			"state":          state.String,
+			"zip":            zip.String,
+			"country":        country.String,
+			"openingBalance": openingBalance,
+			"currentBalance": currentBalance,
+			"status":         status,
+			"createdAt":      createdAt.Format(time.RFC3339),
+			"updatedAt":      updatedAt.Format(time.RFC3339),
+		}
+
+		respondSuccess(
+			w,
+			http.StatusOK,
+			"Supplier retrieved successfully",
+			supplier,
+		)
+	}
+}
+
+func UpdateSupplier(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		id, err := parseIDFromURL(r)
+		if err != nil {
+			respondError(
+				w,
+				http.StatusBadRequest,
+				"Invalid supplier ID",
+				err,
+			)
+			return
+		}
+
+		var req UpdateSupplierRequest
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondError(
+				w,
+				http.StatusBadRequest,
+				"Invalid request payload",
+				err,
+			)
+			return
+		}
+
+		// Trim Input
+		req.SupplierName = strings.TrimSpace(req.SupplierName)
+		req.Mobile = strings.TrimSpace(req.Mobile)
+		req.Email = strings.TrimSpace(req.Email)
+		req.ContactPerson = strings.TrimSpace(req.ContactPerson)
+		req.Address = strings.TrimSpace(req.Address)
+		req.City = strings.TrimSpace(req.City)
+		req.State = strings.TrimSpace(req.State)
+		req.Zip = strings.TrimSpace(req.Zip)
+		req.Country = strings.TrimSpace(req.Country)
+
+		// Validation
+		if err := validateSupplier(req.SupplierName, req.Mobile); err != nil {
+			respondError(
+				w,
+				http.StatusBadRequest,
+				err.Error(),
+				err,
+			)
+			return
+		}
+
+		if req.Country == "" {
+			req.Country = "Bangladesh"
+		}
+
+		query := `
+			UPDATE suppliers
+			SET
+				supplier_name    = $1,
+				mobile           = $2,
+				email            = $3,
+				contact_person   = $4,
+				address          = $5,
+				city             = $6,
+				state            = $7,
+				zip              = $8,
+				country          = $9,
+				opening_balance  = $10,
+				status           = $11,
+				updated_at       = NOW()
+			WHERE id = $12
+		`
+
+		result, err := db.ExecContext(
+			ctx,
+			query,
+			req.SupplierName,
+			req.Mobile,
+			req.Email,
+			req.ContactPerson,
+			req.Address,
+			req.City,
+			req.State,
+			req.Zip,
+			req.Country,
+			req.OpeningBalance,
+			req.Status,
 			id,
 		)
 
 		if err != nil {
-			log.Println("Error updating supplier:", err)
-			respondJSON(w, http.StatusInternalServerError, Response{
-				Status:  http.StatusInternalServerError,
-				Success: false,
-				Message: "Failed to update supplier",
-			})
+			log.Println("UpdateSupplier:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to update supplier",
+				err,
+			)
 			return
 		}
 
 		rowsAffected, err := result.RowsAffected()
-		if err != nil || rowsAffected == 0 {
-			respondJSON(w, http.StatusNotFound, Response{
-				Status:  http.StatusNotFound,
-				Success: false,
-				Message: "Supplier not found or no changes made",
-			})
+		if err != nil {
+			log.Println("UpdateSupplier RowsAffected:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to update supplier",
+				err,
+			)
 			return
 		}
 
-		respondJSON(w, http.StatusOK, Response{
-			Status:  http.StatusOK,
-			Success: true,
-			Message: "Supplier updated successfully",
-		})
+		if rowsAffected == 0 {
+			respondError(
+				w,
+				http.StatusNotFound,
+				"Supplier not found",
+				errors.New("supplier not found"),
+			)
+			return
+		}
+
+		respondSuccess(
+			w,
+			http.StatusOK,
+			"Supplier updated successfully",
+			nil,
+		)
 	}
 }
 
@@ -401,44 +612,65 @@ func DeleteSupplier(db *sql.DB) http.HandlerFunc {
 		ctx := r.Context()
 
 		id, err := parseIDFromURL(r)
-		if err != nil || id <= 0 {
-			respondJSON(w, http.StatusBadRequest, Response{
-				Status:  http.StatusBadRequest,
-				Success: false,
-				Message: "Invalid supplier ID",
-			})
+		if err != nil {
+			respondError(
+				w,
+				http.StatusBadRequest,
+				"Invalid supplier ID",
+				err,
+			)
 			return
 		}
 
-		// 💡 Hard DELETE এর জায়গায় Soft DELETE (status = 0) করা হলো
-		query := `UPDATE suppliers SET status = 0, updated_at = $1 WHERE id = $2`
+		query := `
+			UPDATE suppliers
+			SET
+				status = 0,
+				updated_at = NOW()
+			WHERE id = $1
+		`
 
-		now := time.Now()
-		result, err := db.ExecContext(ctx, query, now, id)
+		result, err := db.ExecContext(ctx, query, id)
 		if err != nil {
-			log.Println("Error deactivating supplier:", err)
-			respondJSON(w, http.StatusInternalServerError, Response{
-				Status:  http.StatusInternalServerError,
-				Success: false,
-				Message: "Failed to deactivate supplier",
-			})
+			log.Println("DeleteSupplier:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to delete supplier",
+				err,
+			)
 			return
 		}
 
 		rowsAffected, err := result.RowsAffected()
-		if err != nil || rowsAffected == 0 {
-			respondJSON(w, http.StatusNotFound, Response{
-				Status:  http.StatusNotFound,
-				Success: false,
-				Message: "Supplier not found",
-			})
+		if err != nil {
+			log.Println("DeleteSupplier RowsAffected:", err)
+
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to delete supplier",
+				err,
+			)
 			return
 		}
 
-		respondJSON(w, http.StatusOK, Response{
-			Status:  http.StatusOK,
-			Success: true,
-			Message: "Supplier deactivated successfully",
-		})
+		if rowsAffected == 0 {
+			respondError(
+				w,
+				http.StatusNotFound,
+				"Supplier not found",
+				errors.New("supplier not found"),
+			)
+			return
+		}
+
+		respondSuccess(
+			w,
+			http.StatusOK,
+			"Supplier deleted successfully",
+			nil,
+		)
 	}
 }
