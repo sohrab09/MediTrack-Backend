@@ -49,9 +49,9 @@ func RegisterMedicineRoutes(mux *http.ServeMux, prefix string, db *sql.DB) {
 	RegisterRoute(mux, prefix, "DELETE /medicine-box-sizes/{id}", medicine_box_sizes.DeleteMedicineBoxSize(db))
 
 	// Medicines
-	RegisterRoute(mux, prefix, "GET /medicines", medicines.GetMedicinesHandler(db))
-	RegisterRoute(mux, prefix, "POST /medicines", medicines.AddMedicineHandler(db))
-	RegisterRoute(mux, prefix, "GET /medicines/{id}", medicines.GetMedicineByIDHandler(db))
-	RegisterRoute(mux, prefix, "PUT /medicines/{id}", medicines.UpdateMedicineHandler(db))
-	RegisterRoute(mux, prefix, "DELETE /medicines/{id}", medicines.DeleteMedicineHandler(db))
+	RegisterRoute(mux, prefix, "GET /medicines", medicines.GetMedicines(db))
+	RegisterRoute(mux, prefix, "POST /medicines", medicines.AddMedicine(db))
+	RegisterRoute(mux, prefix, "GET /medicines/{id}", medicines.GetMedicineByID(db))
+	RegisterRoute(mux, prefix, "PUT /medicines/{id}", medicines.UpdateMedicine(db))
+	RegisterRoute(mux, prefix, "DELETE /medicines/{id}", medicines.DeleteMedicine(db))
 }

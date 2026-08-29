@@ -12,10 +12,11 @@ type Supplier struct {
 	City           *string   `json:"city,omitempty"`
 	State          *string   `json:"state,omitempty"`
 	Zip            *string   `json:"zip,omitempty"`
-	Country        *string   `json:"country,omitempty"`
+	Country        string    `json:"country"`
 	OpeningBalance float64   `json:"opening_balance"`
 	CurrentBalance float64   `json:"current_balance"`
 	Status         int       `json:"status"`
+	CreatedBy      *int      `json:"created_by,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
