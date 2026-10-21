@@ -58,8 +58,15 @@ func AddMedicine(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		if m.Name == "" || m.Code == "" || m.CategoryID == 0 || m.BoxSizeID == 0 || m.UnitID == 0 {
-			respondError(w, http.StatusBadRequest, "Required fields (code, name, category_id, box_size_id, unit_id) are missing")
+		if m.Name == "" ||
+			m.CategoryID == 0 ||
+			m.BoxSizeID == 0 ||
+			m.UnitID == 0 {
+			respondError(
+				w,
+				http.StatusBadRequest,
+				"Required fields (name, category_id, box_size_id, unit_id) are missing",
+			)
 			return
 		}
 
@@ -70,26 +77,57 @@ func AddMedicine(db *sql.DB) http.HandlerFunc {
 			m.Status = 1
 		}
 
-		query := `
-			INSERT INTO medicines (
-				code, barcode, name, strength, generic, category_id, type_id, 
-				box_size_id, unit_id, leaf_id, selling_price, mrp, current_stock, minimum_stock, status, created_by
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-			RETURNING id, created_at, updated_at
-		`
-
+		// Medicine Code will auto generate.
 		err := db.QueryRowContext(
-			r.Context(), query,
-			m.Code, m.Barcode, m.Name, m.Strength, m.Generic, m.CategoryID, m.TypeID,
-			m.BoxSizeID, m.UnitID, m.LeafID, m.SellingPrice, m.MRP, m.CurrentStock, m.MinimumStock, m.Status, m.CreatedBy,
-		).Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt)
+			r.Context(),
+			`SELECT 'MED' || LPAD(nextval('medicine_code_seq')::TEXT, 6, '0')`,
+		).Scan(&m.Code)
 
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to insert medicine: "+err.Error())
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to generate medicine code",
+			)
 			return
 		}
 
-		respondSuccess(w, http.StatusCreated, "Medicine added successfully", m)
+		query := `
+			INSERT INTO medicines (
+				code, barcode, name, strength, generic, category_id, type_id,
+				box_size_id, unit_id, leaf_id, selling_price, mrp,
+				current_stock, minimum_stock, status, created_by
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8,
+				$9, $10, $11, $12, $13, $14, $15, $16
+			)
+			RETURNING id, created_at, updated_at
+		`
+
+		err = db.QueryRowContext(
+			r.Context(),
+			query,
+			m.Code, m.Barcode, m.Name, m.Strength, m.Generic,
+			m.CategoryID, m.TypeID, m.BoxSizeID, m.UnitID,
+			m.LeafID, m.SellingPrice, m.MRP, m.CurrentStock,
+			m.MinimumStock, m.Status, m.CreatedBy,
+		).Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt)
+
+		if err != nil {
+			respondError(
+				w,
+				http.StatusInternalServerError,
+				"Failed to insert medicine: "+err.Error(),
+			)
+			return
+		}
+
+		respondSuccess(
+			w,
+			http.StatusCreated,
+			"Medicine added successfully",
+			m,
+		)
 	}
 }
 
@@ -171,7 +209,7 @@ func GetMedicineByID(db *sql.DB) http.HandlerFunc {
 // UpdateMedicine - Update existing medicine information
 func UpdateMedicine(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idStr := r.URL.Query().Get("id")
+		idStr := r.PathValue("id")
 		id, err := strconv.Atoi(idStr)
 		if err != nil || id <= 0 {
 			respondError(w, http.StatusBadRequest, "Invalid or missing medicine ID")
