@@ -24,6 +24,7 @@ func SetupRoutes(mux *http.ServeMux, db *sql.DB) http.Handler {
 	RegisterSupplierRoutes(mux, apiPrefix, db)
 	RegisterCustomerRoutes(mux, apiPrefix, db)
 	RegisterPurchaseRoutes(mux, apiPrefix, db)
+	RegisterBankRoutes(mux, apiPrefix, db)
 
 	// Global Middleware Setup
 	return router.GlobalRouter(mux)
