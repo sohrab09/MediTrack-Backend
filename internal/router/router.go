@@ -2,9 +2,8 @@ package router
 
 import (
 	"database/sql"
+	"meditrack-backend/global_router"
 	"net/http"
-
-	"meditrack-backend/router"
 )
 
 func SetupRoutes(mux *http.ServeMux, db *sql.DB) http.Handler {
@@ -27,5 +26,5 @@ func SetupRoutes(mux *http.ServeMux, db *sql.DB) http.Handler {
 	RegisterBankRoutes(mux, apiPrefix, db)
 
 	// Global Middleware Setup
-	return router.GlobalRouter(mux)
+	return global_router.GlobalRouter(mux)
 }
