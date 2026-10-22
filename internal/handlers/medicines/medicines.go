@@ -1,16 +1,18 @@
 package medicines
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"io"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"meditrack-backend/internal/models"
 )
 
-// Response standard structure
 type Response struct {
 	Status  int         `json:"status"`
 	Success bool        `json:"success"`
@@ -18,10 +20,27 @@ type Response struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+type medicineInput struct {
+	// ID is optional for backward compatibility with existing frontend requests.
+	// The URL path ID remains the source of truth during updates.
+	ID           int     `json:"id,omitempty"`
+	Name         string  `json:"name"`
+	Generic      *string `json:"generic"`
+	Strength     *string `json:"strength"`
+	UnitID       int     `json:"unit_id"`
+	CategoryID   int     `json:"category_id"`
+	LeafID       *int    `json:"leaf_id"`
+	TypeID       *int    `json:"type_id"`
+	BoxSizeID    int     `json:"box_size_id"`
+	MinimumStock int     `json:"minimum_stock"`
+	Status       *int    `json:"status"`
+}
+
 func respondSuccess(w http.ResponseWriter, status int, message string, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(Response{
+
+	_ = json.NewEncoder(w).Encode(Response{
 		Status:  status,
 		Success: true,
 		Message: message,
@@ -32,137 +51,208 @@ func respondSuccess(w http.ResponseWriter, status int, message string, data inte
 func respondError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(Response{
+
+	_ = json.NewEncoder(w).Encode(Response{
 		Status:  status,
 		Success: false,
 		Message: message,
 	})
 }
 
-// Get User ID from JWT Context Key
-func getUserIDFromContext(ctx context.Context) *int {
-	if val := ctx.Value("userID"); val != nil {
-		if id, ok := val.(int); ok && id > 0 {
-			return &id
-		}
+func decodeMedicineInput(r *http.Request) (medicineInput, error) {
+	var input medicineInput
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&input); err != nil {
+		return input, err
 	}
-	return nil
+
+	// Reject multiple JSON objects or any unexpected trailing content.
+	var extra interface{}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return input, errors.New("request must contain one JSON object")
+		}
+		return input, err
+	}
+
+	input.Name = strings.TrimSpace(input.Name)
+
+	if input.Name == "" {
+		return input, errors.New("name is required")
+	}
+
+	if input.UnitID <= 0 || input.CategoryID <= 0 || input.BoxSizeID <= 0 {
+		return input, errors.New("unit_id, category_id and box_size_id must be positive")
+	}
+
+	if input.LeafID != nil && *input.LeafID <= 0 {
+		return input, errors.New("leaf_id must be positive when provided")
+	}
+
+	if input.TypeID != nil && *input.TypeID <= 0 {
+		return input, errors.New("type_id must be positive when provided")
+	}
+
+	if input.MinimumStock < 0 {
+		return input, errors.New("minimum_stock cannot be negative")
+	}
+
+	if input.Status != nil && *input.Status != 0 && *input.Status != 1 {
+		return input, errors.New("status must be 0 or 1")
+	}
+
+	return input, nil
 }
 
-// AddMedicine - Create a new medicine entry
+// medicineID reads an ID from the URL path or the ?id= query parameter.
+func medicineID(r *http.Request, fromPath bool) (int, error) {
+	idStr := r.URL.Query().Get("id")
+
+	if fromPath {
+		idStr = r.PathValue("id")
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		return 0, errors.New("invalid medicine ID")
+	}
+
+	return id, nil
+}
+
+func applyMedicineInput(m *models.Medicine, input medicineInput) {
+	m.Name = input.Name
+	m.Generic = input.Generic
+	m.Strength = input.Strength
+	m.UnitID = input.UnitID
+	m.CategoryID = input.CategoryID
+	m.LeafID = input.LeafID
+	m.TypeID = input.TypeID
+	m.BoxSizeID = input.BoxSizeID
+	m.MinimumStock = input.MinimumStock
+}
+
+// AddMedicine creates a medicine with status = 1 and current_stock = 0.
 func AddMedicine(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var m models.Medicine
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-			respondError(w, http.StatusBadRequest, "Invalid JSON payload")
-			return
-		}
-
-		if m.Name == "" ||
-			m.CategoryID == 0 ||
-			m.BoxSizeID == 0 ||
-			m.UnitID == 0 {
-			respondError(
-				w,
-				http.StatusBadRequest,
-				"Required fields (name, category_id, box_size_id, unit_id) are missing",
-			)
-			return
-		}
-
-		// JWT Context থেকে User ID নেওয়া
-		m.CreatedBy = getUserIDFromContext(r.Context())
-
-		if m.Status == 0 {
-			m.Status = 1
-		}
-
-		// Medicine Code will auto generate.
-		err := db.QueryRowContext(
-			r.Context(),
-			`SELECT 'MED' || LPAD(nextval('medicine_code_seq')::TEXT, 6, '0')`,
-		).Scan(&m.Code)
-
+		input, err := decodeMedicineInput(r)
 		if err != nil {
-			respondError(
-				w,
-				http.StatusInternalServerError,
-				"Failed to generate medicine code",
-			)
+			respondError(w, http.StatusBadRequest, "Invalid medicine data: "+err.Error())
 			return
 		}
 
 		query := `
 			INSERT INTO medicines (
-				code, barcode, name, strength, generic, category_id, type_id,
-				box_size_id, unit_id, leaf_id, selling_price, mrp,
-				current_stock, minimum_stock, status, created_by
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, $14, $15, $16
+				name,
+				generic,
+				strength,
+				unit_id,
+				category_id,
+				leaf_id,
+				type_id,
+				box_size_id,
+				minimum_stock,
+				current_stock,
+				status
 			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, 1)
 			RETURNING id, created_at, updated_at
 		`
+
+		var m models.Medicine
+		applyMedicineInput(&m, input)
 
 		err = db.QueryRowContext(
 			r.Context(),
 			query,
-			m.Code, m.Barcode, m.Name, m.Strength, m.Generic,
-			m.CategoryID, m.TypeID, m.BoxSizeID, m.UnitID,
-			m.LeafID, m.SellingPrice, m.MRP, m.CurrentStock,
-			m.MinimumStock, m.Status, m.CreatedBy,
+			input.Name,
+			input.Generic,
+			input.Strength,
+			input.UnitID,
+			input.CategoryID,
+			input.LeafID,
+			input.TypeID,
+			input.BoxSizeID,
+			input.MinimumStock,
 		).Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt)
 
 		if err != nil {
-			respondError(
-				w,
-				http.StatusInternalServerError,
-				"Failed to insert medicine: "+err.Error(),
-			)
+			log.Printf("AddMedicine: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to add medicine")
 			return
 		}
 
-		respondSuccess(
-			w,
-			http.StatusCreated,
-			"Medicine added successfully",
-			m,
-		)
+		m.Status = 1
+		respondSuccess(w, http.StatusCreated, "Medicine added successfully", m)
 	}
 }
 
-// GetMedicines - Retrieve medicine list
+// GetMedicines
 func GetMedicines(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query := `
-			SELECT id, code, barcode, name, strength, generic, category_id, type_id, 
-			       box_size_id, unit_id, leaf_id, selling_price, mrp, current_stock, minimum_stock, status, created_by, created_at, updated_at 
-			FROM medicines ORDER BY id DESC
+			SELECT
+				id,
+				name,
+				generic,
+				strength,
+				unit_id,
+				category_id,
+				leaf_id,
+				type_id,
+				box_size_id,
+				minimum_stock,
+				current_stock,
+				status,
+				created_at,
+				updated_at
+			FROM medicines
+			ORDER BY id DESC;
 		`
 
 		rows, err := db.QueryContext(r.Context(), query)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Database error: "+err.Error())
+			log.Printf("GetMedicines: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch medicines")
 			return
 		}
 		defer rows.Close()
 
-		var list []models.Medicine
+		list := make([]models.Medicine, 0)
+
 		for rows.Next() {
 			var m models.Medicine
+
 			if err := rows.Scan(
-				&m.ID, &m.Code, &m.Barcode, &m.Name, &m.Strength, &m.Generic,
-				&m.CategoryID, &m.TypeID, &m.BoxSizeID, &m.UnitID, &m.LeafID,
-				&m.SellingPrice, &m.MRP, &m.CurrentStock, &m.MinimumStock,
-				&m.Status, &m.CreatedBy, &m.CreatedAt, &m.UpdatedAt,
+				&m.ID,
+				&m.Name,
+				&m.Generic,
+				&m.Strength,
+				&m.UnitID,
+				&m.CategoryID,
+				&m.LeafID,
+				&m.TypeID,
+				&m.BoxSizeID,
+				&m.MinimumStock,
+				&m.CurrentStock,
+				&m.Status,
+				&m.CreatedAt,
+				&m.UpdatedAt,
 			); err != nil {
-				respondError(w, http.StatusInternalServerError, "Error scanning row: "+err.Error())
+				log.Printf("GetMedicines scan: %v", err)
+				respondError(w, http.StatusInternalServerError, "Failed to read medicines")
 				return
 			}
+
 			list = append(list, m)
 		}
+
 		if err := rows.Err(); err != nil {
-			respondError(w, http.StatusInternalServerError, "Error iterating medicine rows: "+err.Error())
+			log.Printf("GetMedicines rows: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to read medicines")
 			return
 		}
 
@@ -170,35 +260,62 @@ func GetMedicines(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// GetMedicineByID - Retrieve single medicine details
+// GetMedicineByID
 func GetMedicineByID(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idStr := r.URL.Query().Get("id")
-		id, err := strconv.Atoi(idStr)
-		if err != nil || id <= 0 {
+		id, err := medicineID(r, false)
+		if err != nil {
 			respondError(w, http.StatusBadRequest, "Invalid or missing medicine ID")
 			return
 		}
 
 		query := `
-			SELECT id, code, barcode, name, strength, generic, category_id, type_id, 
-			       box_size_id, unit_id, leaf_id, selling_price, mrp, current_stock, minimum_stock, status, created_by, created_at, updated_at 
-			FROM medicines WHERE id = $1
+			SELECT
+				id,
+				name,
+				generic,
+				strength,
+				unit_id,
+				category_id,
+				leaf_id,
+				type_id,
+				box_size_id,
+				minimum_stock,
+				current_stock,
+				status,
+				created_at,
+				updated_at
+			FROM medicines
+			WHERE id = $1
 		`
 
 		var m models.Medicine
+
 		err = db.QueryRowContext(r.Context(), query, id).Scan(
-			&m.ID, &m.Code, &m.Barcode, &m.Name, &m.Strength, &m.Generic,
-			&m.CategoryID, &m.TypeID, &m.BoxSizeID, &m.UnitID, &m.LeafID,
-			&m.SellingPrice, &m.MRP, &m.CurrentStock, &m.MinimumStock,
-			&m.Status, &m.CreatedBy, &m.CreatedAt, &m.UpdatedAt,
+			&m.ID,
+			&m.Name,
+			&m.Generic,
+			&m.Strength,
+			&m.UnitID,
+			&m.CategoryID,
+			&m.LeafID,
+			&m.TypeID,
+			&m.BoxSizeID,
+			&m.MinimumStock,
+			&m.CurrentStock,
+			&m.Status,
+			&m.CreatedAt,
+			&m.UpdatedAt,
 		)
 
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			respondError(w, http.StatusNotFound, "Medicine not found")
 			return
-		} else if err != nil {
-			respondError(w, http.StatusInternalServerError, "Database error: "+err.Error())
+		}
+
+		if err != nil {
+			log.Printf("GetMedicineByID: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to fetch medicine")
 			return
 		}
 
@@ -206,78 +323,118 @@ func GetMedicineByID(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// UpdateMedicine - Update existing medicine information
+// UpdateMedicine
 func UpdateMedicine(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idStr := r.PathValue("id")
-		id, err := strconv.Atoi(idStr)
-		if err != nil || id <= 0 {
+		id, err := medicineID(r, true)
+		if err != nil {
 			respondError(w, http.StatusBadRequest, "Invalid or missing medicine ID")
 			return
 		}
 
-		var m models.Medicine
-		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
-			respondError(w, http.StatusBadRequest, "Invalid JSON payload")
+		input, err := decodeMedicineInput(r)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid medicine data: "+err.Error())
 			return
+		}
+
+		// If the client also sends an ID in the body, it must match the URL.
+		if input.ID != 0 && input.ID != id {
+			respondError(w, http.StatusBadRequest, "Medicine ID in request body does not match URL ID")
+			return
+		}
+
+		var statusArg interface{}
+		if input.Status != nil {
+			statusArg = *input.Status
 		}
 
 		query := `
-			UPDATE medicines 
-			SET code = $1, barcode = $2, name = $3, strength = $4, generic = $5, 
-			    category_id = $6, type_id = $7, box_size_id = $8, unit_id = $9, leaf_id = $10, 
-			    selling_price = $11, mrp = $12, minimum_stock = $13, status = $14, updated_at = CURRENT_TIMESTAMP 
-			WHERE id = $15
-			RETURNING updated_at
+			UPDATE medicines
+			SET
+				name = $1,
+				generic = $2,
+				strength = $3,
+				unit_id = $4,
+				category_id = $5,
+				leaf_id = $6,
+				type_id = $7,
+				box_size_id = $8,
+				minimum_stock = $9,
+				status = COALESCE($10, status),
+				updated_at = CURRENT_TIMESTAMP
+			WHERE id = $11
+			RETURNING id, current_stock, status, created_at, updated_at
 		`
 
-		err = db.QueryRowContext(
-			r.Context(), query,
-			m.Code, m.Barcode, m.Name, m.Strength, m.Generic,
-			m.CategoryID, m.TypeID, m.BoxSizeID, m.UnitID, m.LeafID,
-			m.SellingPrice, m.MRP, m.MinimumStock, m.Status, id,
-		).Scan(&m.UpdatedAt)
+		var m models.Medicine
+		applyMedicineInput(&m, input)
 
-		if err == sql.ErrNoRows {
+		err = db.QueryRowContext(
+			r.Context(),
+			query,
+			input.Name,
+			input.Generic,
+			input.Strength,
+			input.UnitID,
+			input.CategoryID,
+			input.LeafID,
+			input.TypeID,
+			input.BoxSizeID,
+			input.MinimumStock,
+			statusArg,
+			id,
+		).Scan(
+			&m.ID,
+			&m.CurrentStock,
+			&m.Status,
+			&m.CreatedAt,
+			&m.UpdatedAt,
+		)
+
+		if errors.Is(err, sql.ErrNoRows) {
 			respondError(w, http.StatusNotFound, "Medicine not found")
-			return
-		} else if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to update medicine: "+err.Error())
 			return
 		}
 
-		m.ID = id
+		if err != nil {
+			log.Printf("UpdateMedicine: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to update medicine")
+			return
+		}
+
 		respondSuccess(w, http.StatusOK, "Medicine updated successfully", m)
 	}
 }
 
-// DeleteMedicine - Remove a medicine record
+// DeleteMedicine
 func DeleteMedicine(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idStr := r.PathValue("id")
-		id, err := strconv.Atoi(idStr)
-
-		if err != nil || id <= 0 {
+		id, err := medicineID(r, true)
+		if err != nil {
 			respondError(w, http.StatusBadRequest, "Invalid or missing medicine ID")
 			return
 		}
 
 		query := `
 			UPDATE medicines
-			SET status = 0,
-			    updated_at = CURRENT_TIMESTAMP
+			SET
+				status = 0,
+				updated_at = CURRENT_TIMESTAMP
 			WHERE id = $1
 		`
 
 		result, err := db.ExecContext(r.Context(), query, id)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to delete medicine")
+			log.Printf("DeleteMedicine: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to change medicine status")
 			return
 		}
 
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to check medicine")
+			log.Printf("DeleteMedicine rows affected: %v", err)
+			respondError(w, http.StatusInternalServerError, "Failed to change medicine status")
 			return
 		}
 
@@ -286,6 +443,6 @@ func DeleteMedicine(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		respondSuccess(w, http.StatusOK, "Medicine deleted successfully", nil)
+		respondSuccess(w, http.StatusOK, "Medicine status changed to inactive", nil)
 	}
 }
