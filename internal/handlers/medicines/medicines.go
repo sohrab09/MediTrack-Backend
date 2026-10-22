@@ -254,20 +254,33 @@ func UpdateMedicine(db *sql.DB) http.HandlerFunc {
 // DeleteMedicine - Remove a medicine record
 func DeleteMedicine(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		idStr := r.URL.Query().Get("id")
+		idStr := r.PathValue("id")
 		id, err := strconv.Atoi(idStr)
+
 		if err != nil || id <= 0 {
 			respondError(w, http.StatusBadRequest, "Invalid or missing medicine ID")
 			return
 		}
 
-		result, err := db.ExecContext(r.Context(), "DELETE FROM medicines WHERE id = $1", id)
+		query := `
+			UPDATE medicines
+			SET status = 0,
+			    updated_at = CURRENT_TIMESTAMP
+			WHERE id = $1
+		`
+
+		result, err := db.ExecContext(r.Context(), query, id)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to delete medicine: "+err.Error())
+			respondError(w, http.StatusInternalServerError, "Failed to delete medicine")
 			return
 		}
 
-		rowsAffected, _ := result.RowsAffected()
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to check medicine")
+			return
+		}
+
 		if rowsAffected == 0 {
 			respondError(w, http.StatusNotFound, "Medicine not found")
 			return
