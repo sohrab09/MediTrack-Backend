@@ -1,8 +1,9 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -13,21 +14,33 @@ type Config struct {
 	JWTSecret string
 }
 
-func LoadConfig() *Config {
-	_ = godotenv.Load() // ignore error; fallback to env
+func LoadConfig() (*Config, error) {
+	// .env is optional; deployment environment variables take precedence.
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("load .env: %w", err)
+	}
 
 	cfg := &Config{
 		Port:      getEnv("PORT", "8080"),
-		DBUrl:     getEnv("DATABASE_URL", "postgres://postgres:12345@localhost:5432/meditrack?sslmode=disable"),
-		JWTSecret: getEnv("JWT_SECRET", "change_me_please"),
+		DBUrl:     getEnv("DATABASE_URL", ""),
+		JWTSecret: strings.TrimSpace(os.Getenv("JWT_SECRET")),
 	}
-	log.Printf("Loaded config: port=%s\n", cfg.Port)
-	return cfg
+
+	if cfg.DBUrl == "" {
+		return nil, fmt.Errorf("DATABASE_URL is required")
+	}
+
+	// HS256 should use a strong, randomly generated secret.
+	if len(cfg.JWTSecret) < 32 {
+		return nil, fmt.Errorf("JWT_SECRET must contain at least 32 bytes")
+	}
+
+	return cfg, nil
 }
 
 func getEnv(key, fallback string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
+	if value, ok := os.LookupEnv(key); ok {
+		return value
 	}
 	return fallback
 }

@@ -15,14 +15,21 @@ import (
 )
 
 func Serve() {
-	cfg := config.LoadConfig()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
 	db := database.ConnectPostgres(cfg)
+	if db == nil {
+		log.Fatal("Failed to connect to PostgreSQL")
+	}
 	defer db.Close()
 
 	mux := http.NewServeMux()
 
-	// 🔹 Setup All Routes and Middlewares
-	handler := router.SetupRoutes(mux, db)
+	// Setup All Routes and Middlewares
+	handler := router.SetupRoutes(mux, db, cfg.JWTSecret)
 
 	// Server Config
 	srv := &http.Server{
@@ -33,7 +40,7 @@ func Serve() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 🔹 Server Execution
+	// Server Execution
 	go func() {
 		log.Printf("🚀 MediTrack server running on port %s", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -44,6 +51,8 @@ func Serve() {
 	// Graceful Shutdown Setup
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stop)
+
 	<-stop
 
 	log.Println("⚡ Shutting down server gracefully...")

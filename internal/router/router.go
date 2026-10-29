@@ -2,22 +2,23 @@ package router
 
 import (
 	"database/sql"
-	"meditrack-backend/global_router"
 	"net/http"
+
+	"meditrack-backend/global_router"
 )
 
-func SetupRoutes(mux *http.ServeMux, db *sql.DB) http.Handler {
+func SetupRoutes(mux *http.ServeMux, db *sql.DB, jwtSecret string) http.Handler {
 	apiPrefix := "/api/v1"
 
 	// Health Check
 	RegisterRoute(mux, apiPrefix, "GET /health-check", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	// Feature-wise Route Group Integration
 	RegisterMenuRoutes(mux, apiPrefix, db)
-	RegisterAuthRoutes(mux, apiPrefix, db)
+	RegisterAuthRoutes(mux, apiPrefix, db, jwtSecret)
 	RegisterUserRoutes(mux, apiPrefix, db)
 	RegisterMedicineRoutes(mux, apiPrefix, db)
 	RegisterSupplierRoutes(mux, apiPrefix, db)

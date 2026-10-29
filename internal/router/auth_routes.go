@@ -8,7 +8,7 @@ import (
 	"meditrack-backend/internal/handlers/register"
 )
 
-func RegisterAuthRoutes(mux *http.ServeMux, prefix string, db *sql.DB) {
-	RegisterRoute(mux, prefix, "POST /auth/login", login.LoginHandler(db))
+func RegisterAuthRoutes(mux *http.ServeMux, prefix string, db *sql.DB, jwtSecret string) {
+	RegisterRoute(mux, prefix, "POST /auth/login", login.LoginHandler(db, jwtSecret))
 	RegisterRoute(mux, prefix, "POST /auth/register", register.RegisterHandler(db))
 }
